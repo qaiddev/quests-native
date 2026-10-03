@@ -12,6 +12,7 @@ import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isHeading
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -26,9 +27,8 @@ import dev.qaid.quests.QaidQuests
 import dev.qaid.quests.core.FakeTransport
 import dev.qaid.quests.core.HttpRequest
 import dev.qaid.quests.core.HttpResponse
-import dev.qaid.quests.core.QaidQuestErrorEvent
+import dev.qaid.quests.core.QaidQuestsErrorEvent
 import dev.qaid.quests.core.QaidQuestTheme
-import dev.qaid.quests.core.QaidQuestThemeMode
 import dev.qaid.quests.core.QaidQuestsConfig
 import dev.qaid.quests.core.QuestAnswer
 import org.json.JSONObject
@@ -93,7 +93,7 @@ class QaidQuestUiTest {
         compose.onNodeWithTag(QaidQuestTags.ERROR).assertDoesNotExist()
         compose.onNodeWithText("1 / 3").assertIsDisplayed()
         next()
-        compose.onNodeWithText("Why?").assertIsDisplayed()
+        compose.onNode(hasText("Why?") and isHeading()).assertIsDisplayed()
         compose.onNodeWithTag(QaidQuestTags.BACK).performClick()
         compose.waitForIdle()
         compose.onNodeWithText("Your role").assertExists()
@@ -130,7 +130,7 @@ class QaidQuestUiTest {
         compose.onNodeWithTag(QaidQuestTags.CURRENCY).performTextInput("0.5")
         next()
         compose.onNodeWithText("Please enter a valid amount.").assertIsDisplayed()
-        compose.onNodeWithTag(QaidQuestTags.CURRENCY).performTextReplacement("12,5")
+        compose.onNodeWithTag(QaidQuestTags.CURRENCY).performTextReplacement("12.5")
         compose.onNodeWithTag(QaidQuestTags.CURRENCY).performImeAction()
         compose.waitForIdle()
         compose.onNodeWithText("5").assertIsDisplayed()
@@ -170,7 +170,7 @@ class QaidQuestUiTest {
         compose.waitForIdle()
         compose.onNodeWithTag(QaidQuestTags.option("a")).assertIsOn()
         next()
-        compose.onNodeWithText("Then").assertIsDisplayed()
+        compose.onNode(hasText("Then") and isHeading()).assertIsDisplayed()
         compose.onNodeWithTag(QaidQuestTags.BACK).performClick()
         compose.waitForIdle()
         compose.onNodeWithTag(QaidQuestTags.option("b")).assertIsOn()
@@ -182,7 +182,7 @@ class QaidQuestUiTest {
 
     @Test fun loadErrorOffersRetry() {
         server.respond = { r -> if (r.url.endsWith("/definition")) HttpResponse(404, """{"error":"Quest not found"}""") else FakeTransport.defaultResponse(r) }
-        val events = mutableListOf<QaidQuestErrorEvent>()
+        val events = mutableListOf<QaidQuestsErrorEvent>()
         QaidQuests.onError = { events += it }
         show()
         compose.onNodeWithText("Couldn't load form").assertIsDisplayed()
@@ -244,7 +244,7 @@ class QaidQuestUiTest {
         show(onClose = { closed++ })
         compose.onNodeWithText("This question can't be shown in this version of the app.").assertIsDisplayed()
         next()
-        compose.onNodeWithText("After").assertIsDisplayed()
+        compose.onNode(hasText("After") and isHeading()).assertIsDisplayed()
         compose.onNodeWithContentDescription("Close form").performClick()
         assertEquals(1, closed)
     }
@@ -262,7 +262,7 @@ class QaidQuestUiTest {
             compose.activity,
             QaidQuestsConfig(
                 apiKey = "key", appName = "App",
-                theme = QaidQuestTheme(accent = 0xFF3B82F6.toInt(), mode = QaidQuestThemeMode.DARK, fontFamily = "serif", preset = "pill"),
+                theme = QaidQuestTheme(accent = 0xFF3B82F6.toInt(), mode = QaidQuestTheme.Mode.DARK, fontFamily = "serif", preset = QaidQuestTheme.Preset.PILL),
             ),
         )
         show()
@@ -314,6 +314,50 @@ class QaidQuestUiTest {
         compose.onNode(hasText("Close")).performClick()
         compose.waitForIdle()
         assertEquals(1, closed)
+    }
+
+    @Test fun presentedSheetSurvivesARotation() {
+        var closed = 0
+        compose.runOnUiThread { QaidQuests.present(compose.activity, "quest1", onClose = { closed++ }) }
+        compose.waitForIdle()
+        compose.onNodeWithTag(QaidQuestTags.option("dev")).performClick()
+        next()
+        compose.onNode(hasText("Why?") and isHeading()).assertIsDisplayed()
+        compose.activityRule.scenario.recreate()
+        compose.waitForIdle()
+        // Shown again over the new activity: same step, same response, nothing closed.
+        compose.onNode(hasText("Why?") and isHeading()).assertIsDisplayed()
+        assertEquals(0, closed)
+        assertEquals(1, server.count("POST", "/responses"))
+        compose.onNodeWithTag(QaidQuestTags.BACK).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag(QaidQuestTags.option("dev")).assertIsSelected()
+        compose.onNodeWithContentDescription("Close form").performClick()
+        compose.waitForIdle()
+        assertEquals(1, closed)
+        compose.onNodeWithText("Your role").assertDoesNotExist()
+    }
+
+    @Test fun typingFieldsAreNamedByTheirLabelSoTalkBackReadsWhatWasTyped() {
+        definition = """{"id":"q","questions":[{"id":"n","label":"Name","type":"text"},
+            {"id":"c","label":"Budget","type":"currency","currency":"USD"}]}"""
+        show()
+        val noDescription = SemanticsMatcher.keyNotDefined(SemanticsProperties.ContentDescription)
+        compose.onNodeWithTag(QaidQuestTags.TEXT).performTextInput("Ann")
+        compose.onNodeWithTag(QaidQuestTags.TEXT).assert(hasText("Name")).assert(hasText("Ann")).assert(noDescription)
+        next()
+        compose.onNodeWithTag(QaidQuestTags.CURRENCY).performTextInput("1,000")
+        compose.onNodeWithTag(QaidQuestTags.CURRENCY).assert(hasText("Budget")).assert(hasText("1,000")).assert(noDescription)
+        idleMain(600) // past the save debounce
+        compose.onNodeWithTag(QaidQuestTags.CURRENCY).performTextReplacement("1000.5")
+        compose.waitForIdle()
+        next()
+        idleMain()
+        // English groups with ","; "1,000" was sent as null, never as 1.
+        val patches = server.patches()
+        assertTrue(patches.contains("""{"questionId":"c","value":null}"""))
+        assertTrue(patches.contains("""{"questionId":"c","value":1000.5}"""))
+        assertTrue(patches.none { it == """{"questionId":"c","value":1}""" })
     }
 
     private companion object {

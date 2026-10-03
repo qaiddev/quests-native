@@ -25,7 +25,7 @@ class ModelTest {
         assertEquals("D", q.description)
         assertTrue(q.hideTitle)
         assertTrue(q.hideProgress)
-        assertEquals(ProgressPosition.BOTTOM, q.progressPosition)
+        assertEquals(QaidQuestProgressPosition.BOTTOM, q.progressPosition)
         assertEquals("Ta", q.thankYouTitle)
         assertEquals("M", q.thankYouMessage)
         assertEquals("Go", q.submitLabel)
@@ -39,7 +39,7 @@ class ModelTest {
         assertFalse(q.hideTitle)
         assertNull(q.progressPosition)
         assertNull(q.versionNumber)
-        assertEquals(ProgressPosition.TOP, QuestDecoder.progressPosition("top"))
+        assertEquals(QaidQuestProgressPosition.TOP, QuestDecoder.progressPosition("top"))
     }
 
     @Test fun badBodiesFailWithTheWebMessages() {

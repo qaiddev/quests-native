@@ -57,15 +57,17 @@ class WireTest {
     }
 
     @Test fun errors() {
-        assertTrue(QaidQuestError.Network("x").isRetryable)
-        assertTrue(QaidQuestError.Http(500, "").isRetryable)
-        assertTrue(QaidQuestError.Http(408, "").isRetryable)
-        assertTrue(QaidQuestError.Http(429, "").isRetryable)
-        assertFalse(QaidQuestError.Http(404, "Quest not found").isRetryable)
-        assertFalse(QaidQuestError.Decoding("x").isRetryable)
-        assertFalse(QaidQuestError.Storage("x").isRetryable)
-        assertEquals("HTTP 404 Quest not found", QaidQuestError.Http(404, "Quest not found").message)
-        assertEquals("HTTP 500", QaidQuestError.Http(500, "").message)
+        assertTrue(QaidQuestsError.Network("x").isRetryable)
+        assertTrue(QaidQuestsError.Server(500).isRetryable)
+        assertTrue(QaidQuestsError.Rejected(408, "").isRetryable)
+        assertTrue(QaidQuestsError.Rejected(429, "").isRetryable)
+        assertFalse(QaidQuestsError.Rejected(404, "Quest not found").isRetryable)
+        assertFalse(QaidQuestsError.InvalidResponse("x").isRetryable)
+        assertFalse(QaidQuestsError.Storage("x").isRetryable)
+        assertEquals("Quest not found", QaidQuestsError.Rejected(404, "Quest not found").message)
+        assertEquals("HTTP 500", QaidQuestsError.Server(500).message)
+        assertEquals(QaidQuestsError.Server(502), QaidQuestsError.of(502, "<html>"))
+        assertEquals(QaidQuestsError.Rejected(403, "Domain not allowed"), QaidQuestsError.of(403, """{"error":"Domain not allowed"}"""))
         assertEquals(1_000L, RetryPolicy().delayAfter(0))
         assertNull(RetryPolicy().delayAfter(2))
     }
@@ -78,19 +80,19 @@ class WireTest {
         assertEquals(listOf(5L, 7L), waits)
 
         val refused = FakeTransport { HttpResponse(401, """{"error":"Invalid API key"}""") }
-        assertEquals(CallOutcome.Refused(QaidQuestError.Http(401, "Invalid API key")), refused.call(QuestRequests.get("u", "ua"), RetryPolicy(), {}))
+        assertEquals(CallOutcome.Refused(QaidQuestsError.Rejected(401, "Invalid API key")), refused.call(QuestRequests.get("u", "ua"), RetryPolicy(), {}))
         assertEquals(1, refused.requests.size)
 
         val down = FakeTransport { throw IOException() }
         val outcome = down.call(QuestRequests.get("u", "ua"), RetryPolicy(listOf(1)), {})
-        assertEquals(CallOutcome.Unreachable(QaidQuestError.Network("IOException")), outcome)
+        assertEquals(CallOutcome.Unreachable(QaidQuestsError.Network("IOException")), outcome)
         assertEquals(2, down.requests.size)
 
         val informational = FakeTransport { HttpResponse(199, "") }
-        assertEquals(CallOutcome.Refused(QaidQuestError.Http(199, "")), informational.call(QuestRequests.get("u", "ua"), RetryPolicy(), {}))
+        assertEquals(CallOutcome.Refused(QaidQuestsError.Rejected(199, "")), informational.call(QuestRequests.get("u", "ua"), RetryPolicy(), {}))
 
         val odd = FakeTransport { throw SecurityException("no INTERNET permission") }
-        assertEquals(CallOutcome.Unreachable(QaidQuestError.Network("no INTERNET permission")), odd.call(QuestRequests.get("u", "ua"), RetryPolicy(emptyList()), {}))
+        assertEquals(CallOutcome.Unreachable(QaidQuestsError.Network("no INTERNET permission")), odd.call(QuestRequests.get("u", "ua"), RetryPolicy(emptyList()), {}))
     }
 
     @Test(expected = CancellationException::class)

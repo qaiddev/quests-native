@@ -48,25 +48,60 @@ class ValidationTest {
     }
 
     @Test fun messagesAreOverridable() {
-        val de = QaidQuestText(errorRequired = "Pflichtfeld.", errorMinLength = "Mindestens {n} Zeichen.")
+        val de = QaidQuestText(validationRequired = "Pflichtfeld.", validationMinLength = "Mindestens {count} Zeichen.")
         assertEquals("Pflichtfeld.", QuestValidation.message(text("t", required = true), QuestAnswer.Text(""), de))
         assertEquals("Mindestens 4 Zeichen.", QuestValidation.message(text("t", required = true, minLength = 4), QuestAnswer.Text(""), de))
         assertEquals("Question 2 of 5", text.fill(text.progressValue, 2, 5))
+        assertEquals("Failed to load questionnaire (503)", text.loadErrorMessage(503))
     }
 
     @Test fun textRules() {
         assertEquals("abc", TextRules.clip("abcdef", 3))
         assertEquals("ab", TextRules.clip("ab", 3))
         assertEquals("abcdef", TextRules.clip("abcdef", null))
+        // UTF-16 units, as the web counts: an emoji is two, and is never cut in half.
+        assertEquals("a\uD83D\uDE00", TextRules.clip("a\uD83D\uDE00b", 3))
+        assertEquals("a", TextRules.clip("a\uD83D\uDE00b", 2))
+    }
+
+    @Test fun lengthsAndBlanksAreJavaScripts() {
+        // minLength counts UTF-16 units: one emoji is 2, as in the web embed.
+        assertNull(msg(text("t", required = true, minLength = 2), QuestAnswer.Text("\uD83D\uDE00")))
+        // Every character JavaScript's trim() strips is blank; nothing else is.
+        val js = "\t\n\u000B\u000C\r \u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF"
+        js.forEach { assertTrue("U+%04X".format(it.code), JsText.isSpace(it)) }
+        assertFalse(QuestAnswer.Text(js).isAnswered)
+        assertEquals("This field is required.", msg(text("t", required = true), QuestAnswer.Text("\u00A0\uFEFF")))
+        // Kotlin's own isWhitespace() says yes to these; JavaScript (and so the web) says no.
+        for (c in listOf('\u001C', '\u001D', '\u001E', '\u001F')) {
+            assertFalse(JsText.isSpace(c))
+            assertTrue(QuestAnswer.Text(c.toString()).isAnswered)
+        }
+        assertFalse(JsText.isSpace('\u0085'))
+        assertFalse(JsText.isSpace('\u200B'))
+        assertEquals("a b", JsText.trim("\uFEFF a b\u00A0"))
     }
 
     @Test fun currencyParsingAndSymbols() {
-        assertNull(CurrencyRules.parse(""))
-        assertNull(CurrencyRules.parse("abc"))
-        assertNull(CurrencyRules.parse("1e999"))
-        assertEquals(12.5, CurrencyRules.parse("12.5")!!, 0.0)
-        assertEquals(12.0, CurrencyRules.parse("12.")!!, 0.0)
-        assertEquals(12.5, CurrencyRules.parse("12,5")!!, 0.0)
+        assertNull(CurrencyRules.parse("", '.'))
+        assertNull(CurrencyRules.parse("abc", '.'))
+        assertNull(CurrencyRules.parse("-", '.'))
+        assertNull(CurrencyRules.parse("1e5", '.'))
+        assertNull(CurrencyRules.parse("5d", '.'))
+        assertNull(CurrencyRules.parse("9".repeat(400), '.'))
+        assertEquals(12.5, CurrencyRules.parse(" 12.5 ", '.')!!, 0.0)
+        assertEquals(12.0, CurrencyRules.parse("12.", '.')!!, 0.0)
+        assertEquals(-0.5, CurrencyRules.parse("-.5", '.')!!, 0.0)
+        // English: "," groups thousands. Grouping is not read (the web and iOS send null too),
+        // so "1,000" is never taken for 1.
+        assertNull(CurrencyRules.parse("1,000", '.'))
+        assertNull(CurrencyRules.parse("12,5", '.'))
+        // German: "," is the decimal point, and "." still is one; "1.000,5" is grouped, so null.
+        assertEquals(12.5, CurrencyRules.parse("12,5", ',')!!, 0.0)
+        assertEquals(12.5, CurrencyRules.parse("12.5", ',')!!, 0.0)
+        assertNull(CurrencyRules.parse("1.000,5", ','))
+        assertEquals('.', CurrencyRules.decimalSeparator(Locale.US))
+        assertEquals(',', CurrencyRules.decimalSeparator(Locale.GERMANY))
         assertEquals("-12.50", CurrencyRules.sanitize("-1a2.5.0"))
         assertEquals("12,5", CurrencyRules.sanitize("12,5,"))
         assertEquals("15", CurrencyRules.sanitize("1-5"))
@@ -93,6 +128,8 @@ class ValidationTest {
         // max off the grid: the top value is the last step under it.
         assertEquals(9.0, RangeRules.snap(RangeQuestion("r", "R", min = 0.0, max = 10.0, step = 3.0), 10.0), 0.0)
         assertEquals(0.3, RangeRules.snap(RangeQuestion("r", "R", min = 0.0, max = 1.0, step = 0.1), 0.3), 0.0)
+        // 0.3 / 0.1 is 2.9999999999999996: the tolerance keeps 0.3 the top step (iOS has it too).
+        assertEquals(0.3, RangeRules.snap(RangeQuestion("r", "R", min = 0.0, max = 0.3, step = 0.1), 9.0), 0.0)
         assertEquals(4, RangeRules.sliderSteps(q))
         assertEquals(0, RangeRules.sliderSteps(q.copy(step = 3.0)))
         assertEquals(0, RangeRules.sliderSteps(q.copy(step = 0.001)))

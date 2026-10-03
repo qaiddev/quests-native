@@ -1,19 +1,22 @@
 package dev.qaid.quests.core
 
+import dev.qaid.quests.core.QaidQuestsErrorEvent.Operation as Op
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
 /** One answer save still to send. */
-data class PendingPatch(val questionId: String, val value: QuestAnswer)
+internal data class PendingPatch(val questionId: String, val value: QuestAnswer)
 
 /**
  * A finished response that couldn't reach qaid, saved to send later in order: the create
  * (when it never got an id), the answer saves, then the submit.
  */
-data class PendingResponse(
+internal data class PendingResponse(
     val id: String,
     val createdAtMs: Long,
+    /** For error events; "" in a file saved before it was recorded. */
+    val questId: String,
     /** The quests base it was answered against. */
     val base: String,
     val userAgent: String,
@@ -28,6 +31,7 @@ data class PendingResponse(
         put("v", 1)
         put("id", id)
         put("createdAt", createdAtMs)
+        put("questId", questId)
         put("base", base)
         put("userAgent", userAgent)
         responseId?.let { put("responseId", it) }
@@ -51,6 +55,7 @@ data class PendingResponse(
             PendingResponse(
                 id = obj.getString("id"),
                 createdAtMs = obj.getLong("createdAt"),
+                questId = obj.optString("questId"),
                 base = obj.getString("base"),
                 userAgent = obj.optString("userAgent"),
                 responseId = obj.str("responseId"),
@@ -63,7 +68,7 @@ data class PendingResponse(
 }
 
 /** How much the offline queue may hold. */
-object PendingPolicy {
+internal object PendingPolicy {
     const val MAX_ITEMS = 20
     const val MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000
 
@@ -88,7 +93,7 @@ object PendingPolicy {
  * a response holds the embed key and the person's answers, which don't belong in a cloud
  * backup). A file is written to `.tmp` then renamed, so a file on disk is always whole.
  */
-class PendingStore(private val dir: File, private val now: () -> Long = System::currentTimeMillis) {
+internal class PendingStore(private val dir: File, private val now: () -> Long = System::currentTimeMillis) {
     private val lock = Any()
 
     /** Saves [response] and applies [PendingPolicy]. False when it couldn't be written. */
@@ -144,12 +149,12 @@ class PendingStore(private val dir: File, private val now: () -> Long = System::
  * refused call (4xx) is dropped and reported — it would never succeed — and a call that
  * can't reach the server stops the whole flush, keeping it and everything after it for next time.
  */
-class PendingFlusher(
+internal class PendingFlusher(
     private val store: PendingStore,
     private val transport: QuestTransport,
     private val retry: RetryPolicy = RetryPolicy(emptyList()),
     private val sleep: suspend (Long) -> Unit = {},
-    private val onRefused: (QuestOperation, QaidQuestError) -> Unit = { _, _ -> },
+    private val onRefused: (QaidQuestsErrorEvent) -> Unit = {},
 ) {
     /** How many responses were fully sent. */
     suspend fun flush(): Int {
@@ -175,11 +180,11 @@ class PendingFlusher(
             when (val r = transport.call(QuestRequests.create(endpoints, ua, saved.createBody), retry, sleep)) {
                 is CallOutcome.Ok -> {
                     responseId = QuestRequests.createdId(r.body)
-                        ?: return drop(saved, QuestOperation.CREATE_RESPONSE, QaidQuestError.Decoding("no response id"))
+                        ?: return drop(saved, Op.CREATE_RESPONSE, QaidQuestsError.InvalidResponse("no response id"))
                     current = current.copy(responseId = responseId)
                     store.save(current)
                 }
-                is CallOutcome.Refused -> return drop(saved, QuestOperation.CREATE_RESPONSE, r.error)
+                is CallOutcome.Refused -> return drop(saved, Op.CREATE_RESPONSE, r.error)
                 else -> return Step.STOP
             }
         }
@@ -187,7 +192,7 @@ class PendingFlusher(
             val patch = current.patches.first()
             val body = QuestRequests.patchBody(patch.questionId, patch.value)
             when (val r = transport.call(QuestRequests.patch(endpoints, responseId, ua, body), retry, sleep)) {
-                is CallOutcome.Refused -> onRefused(QuestOperation.SAVE_ANSWER, r.error)
+                is CallOutcome.Refused -> onRefused(QaidQuestsErrorEvent(saved.questId, Op.SAVE_ANSWER, patch.questionId, r.error))
                 is CallOutcome.Ok -> Unit
                 else -> return Step.STOP
             }
@@ -197,7 +202,7 @@ class PendingFlusher(
         val submit = current.submitBody
         if (submit != null) {
             when (val r = transport.call(QuestRequests.submit(endpoints, responseId, ua, submit), retry, sleep)) {
-                is CallOutcome.Refused -> return drop(current, QuestOperation.SUBMIT, r.error)
+                is CallOutcome.Refused -> return drop(current, Op.SUBMIT, r.error)
                 is CallOutcome.Ok -> Unit
                 else -> return Step.STOP
             }
@@ -206,9 +211,9 @@ class PendingFlusher(
         return Step.DONE
     }
 
-    private fun drop(saved: PendingResponse, operation: QuestOperation, error: QaidQuestError): Step {
+    private fun drop(saved: PendingResponse, operation: Op, error: QaidQuestsError): Step {
         store.delete(saved.id)
-        onRefused(operation, error)
+        onRefused(QaidQuestsErrorEvent(saved.questId, operation, error = error))
         return Step.DROPPED
     }
 }

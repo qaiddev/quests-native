@@ -10,10 +10,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
-enum class QuestPhase { LOADING, LOAD_FAILED, ANSWERING, SUBMITTING, SUBMIT_FAILED, DONE }
+internal enum class QuestPhase { LOADING, LOAD_FAILED, ANSWERING, SUBMITTING, SUBMIT_FAILED, DONE }
 
 /** The step on screen. */
-data class QuestStep(
+internal data class QuestStep(
     val index: Int,
     val total: Int,
     val question: Question,
@@ -26,7 +26,7 @@ data class QuestStep(
 )
 
 /** Everything the UI draws, as one value; the UI holds no logic of its own. */
-data class QuestViewState(
+internal data class QuestViewState(
     val phase: QuestPhase = QuestPhase.LOADING,
     val style: QuestStyle = QuestStyles.DEFAULT,
     val text: QaidQuestText = QaidQuestText(),
@@ -38,7 +38,7 @@ data class QuestViewState(
     val step: QuestStep? = null,
     val showProgress: Boolean = false,
     val progressFraction: Float = 0f,
-    val progressPosition: ProgressPosition = ProgressPosition.TOP,
+    val progressPosition: QaidQuestProgressPosition = QaidQuestProgressPosition.TOP,
     val thankYouTitle: String = text.thankYouTitle,
     val thankYouMessage: String? = null,
     /** The answers were saved on the device to send later. */
@@ -46,9 +46,9 @@ data class QuestViewState(
 )
 
 /** Who sees what happens: the host's callbacks, the log, and the offline queue. */
-interface QuestCallbacks {
+internal interface QuestCallbacks {
     fun onComplete(answers: Map<String, QuestAnswer>)
-    fun onError(event: QaidQuestErrorEvent)
+    fun onError(event: QaidQuestsErrorEvent)
     fun log(message: String)
 
     /** Saves a response that couldn't be sent. False when it couldn't be written. */
@@ -56,7 +56,7 @@ interface QuestCallbacks {
 }
 
 /** What a response is created with, gathered by the platform layer when the view appears. */
-data class QuestEnvironment(
+internal data class QuestEnvironment(
     val pageUrl: String,
     val visitorId: String,
     val userAgent: String,
@@ -69,7 +69,7 @@ data class QuestEnvironment(
  * send later when qaid can't be reached. Runs on [scope]'s thread; the UI calls in and
  * renders [state].
  */
-class QuestController(
+internal class QuestController(
     private val questId: String,
     private val config: QaidQuestsConfig,
     private val environment: QuestEnvironment,
@@ -170,7 +170,7 @@ class QuestController(
             is CallOutcome.Ok -> try {
                 return QuestDecoder.questionnaire(r.body, questId)
             } catch (e: QuestDecodeException) {
-                reportLoad(QaidQuestError.Decoding(e.detail))
+                reportLoad(QaidQuestsError.InvalidResponse(e.detail))
                 if (e.detail == EMPTY) text.loadErrorEmpty else text.loadErrorInvalid
             }
             is CallOutcome.Refused -> statusDetail(r.error)
@@ -180,26 +180,39 @@ class QuestController(
         return null
     }
 
-    private fun statusDetail(error: QaidQuestError): String {
+    private fun statusDetail(error: QaidQuestsError): String {
         reportLoad(error)
-        return if (error is QaidQuestError.Http) text.fill(text.loadErrorStatus, error.status) else text.loadErrorOffline
+        return when (error) {
+            is QaidQuestsError.Rejected -> text.loadErrorMessage(error.status)
+            is QaidQuestsError.Server -> text.loadErrorMessage(error.status)
+            else -> text.loadErrorOffline
+        }
     }
 
-    private fun reportLoad(error: QaidQuestError) =
-        callbacks.onError(QaidQuestErrorEvent(questId, QuestOperation.LOAD_DEFINITION, error))
+    private fun reportLoad(error: QaidQuestsError) =
+        callbacks.onError(QaidQuestsErrorEvent(questId, QaidQuestsErrorEvent.Operation.LOAD_QUEST, error = error))
 
-    /** A failed or unreadable theme is only logged: the quest draws with qaid's defaults. */
+    /** A failed or unreadable theme is reported, and the quest draws with qaid's defaults, as on the web. */
     private suspend fun loadTheme(): QuestStyle {
         val url = config.themeUrl() ?: return QuestStyles.build(null, config.theme)
         val doc = when (val r = transport.call(QuestRequests.get(url, environment.userAgent), RetryPolicy(emptyList()), ::delay)) {
-            is CallOutcome.Ok -> runCatching { QuestThemeDoc.decode(r.body) }.getOrNull()
-            else -> null
+            is CallOutcome.Ok -> try {
+                QuestThemeDoc.decode(r.body)
+            } catch (e: QuestDecodeException) {
+                reportTheme(QaidQuestsError.InvalidResponse(e.detail))
+            }
+            is CallOutcome.Refused -> reportTheme(r.error)
+            is CallOutcome.Unreachable -> reportTheme(r.error)
         }
-        if (doc == null) callbacks.log("quest theme ${config.themeId} couldn't be loaded; using defaults")
         if (doc?.ignoredCss == true || doc?.unstyled == true) {
             callbacks.log("quest theme ${config.themeId}: custom CSS and 'unstyled' have no native equivalent and are ignored")
         }
         return QuestStyles.build(doc, config.theme)
+    }
+
+    private fun reportTheme(error: QaidQuestsError): QuestThemeDoc? {
+        callbacks.onError(QaidQuestsErrorEvent(questId, QaidQuestsErrorEvent.Operation.LOAD_THEME, error = error))
+        return null
     }
 
     private fun begin(quest: Questionnaire, style: QuestStyle) {
@@ -210,8 +223,9 @@ class QuestController(
             config.apiKey, quest.id, environment.pageUrl, environment.visitorId, environment.userAgent, environment.metadata,
         )
         val sync = ResponseSync(
-            transport, endpoints, createBody, environment.userAgent, scope, retry, config.saveDebounceMs, busy = _saving,
-        ) { operation, error -> callbacks.onError(QaidQuestErrorEvent(questId, operation, error)) }
+            transport, endpoints, questId, createBody, environment.userAgent, scope, callbacks::persist, retry,
+            config.saveDebounceMs, busy = _saving, onError = callbacks::onError,
+        )
         sync.start()
         val session = QuestSession(quest, text, object : QuestSession.Effects {
             override fun save(questionId: String, value: QuestAnswer, immediate: Boolean) = sync.answer(questionId, value, immediate)
@@ -224,7 +238,7 @@ class QuestController(
             style = style,
             title = quest.title?.takeIf { !quest.hideTitle && it.isNotBlank() },
             description = quest.description?.takeIf { !quest.hideTitle && it.isNotBlank() },
-            progressPosition = config.progressPosition ?: quest.progressPosition ?: ProgressPosition.TOP,
+            progressPosition = config.progressPosition ?: quest.progressPosition ?: QaidQuestProgressPosition.TOP,
             thankYouTitle = quest.thankYouTitle ?: text.thankYouTitle,
             thankYouMessage = quest.thankYouMessage,
         )
@@ -238,18 +252,9 @@ class QuestController(
         val answers = session.submittedAnswers()
         val hidden = session.hiddenAnswered()
         scope.launch {
-            val phase = when (val outcome = sync.submit(answers, hidden)) {
-                SubmitOutcome.Sent -> QuestPhase.DONE
-                is SubmitOutcome.Offline -> if (callbacks.persist(outcome.pending)) {
-                    _state.value = _state.value.copy(savedOffline = true)
-                    QuestPhase.DONE
-                } else {
-                    callbacks.onError(QaidQuestErrorEvent(questId, QuestOperation.SUBMIT, QaidQuestError.Storage("couldn't save answers to send later")))
-                    QuestPhase.SUBMIT_FAILED
-                }
-                is SubmitOutcome.Failed -> QuestPhase.SUBMIT_FAILED
-            }
-            _state.value = _state.value.copy(phase = phase)
+            val outcome = sync.submit(answers, hidden)
+            val phase = if (outcome is SubmitOutcome.Failed) QuestPhase.SUBMIT_FAILED else QuestPhase.DONE
+            _state.value = _state.value.copy(phase = phase, savedOffline = outcome == SubmitOutcome.SavedOffline)
             if (phase == QuestPhase.DONE) callbacks.onComplete(answers)
         }
     }

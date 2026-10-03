@@ -32,7 +32,8 @@ public enum QuestAnswer: Equatable, Sendable {
     }
 }
 
-package enum ProgressPosition: String, Equatable, Sendable {
+/// Where the progress bar goes: over the question, or in the footer.
+public enum QaidQuestProgressPosition: String, Equatable, Sendable {
     case top, bottom
 }
 
@@ -48,7 +49,7 @@ package struct Questionnaire: Equatable, Sendable {
     package var description: String?
     package var hideTitle: Bool
     package var hideProgress: Bool
-    package var progressPosition: ProgressPosition
+    package var progressPosition: QaidQuestProgressPosition
     package var thankYouTitle: String?
     package var thankYouMessage: String?
     package var submitLabel: String?
@@ -57,7 +58,7 @@ package struct Questionnaire: Equatable, Sendable {
     package var questions: [QuestQuestion]
 
     package init(id: String, title: String? = nil, description: String? = nil, hideTitle: Bool = false,
-                 hideProgress: Bool = false, progressPosition: ProgressPosition = .top,
+                 hideProgress: Bool = false, progressPosition: QaidQuestProgressPosition = .top,
                  thankYouTitle: String? = nil, thankYouMessage: String? = nil, submitLabel: String? = nil,
                  nextLabel: String? = nil, backLabel: String? = nil, questions: [QuestQuestion]) {
         self.id = id
@@ -271,7 +272,7 @@ extension Questionnaire {
             description: json["description"]?.stringValue,
             hideTitle: json["hideTitle"]?.boolValue ?? false,
             hideProgress: json["hideProgress"]?.boolValue ?? false,
-            progressPosition: (json["progressPosition"]?.stringValue).flatMap(ProgressPosition.init) ?? .top,
+            progressPosition: (json["progressPosition"]?.stringValue).flatMap(QaidQuestProgressPosition.init) ?? .top,
             thankYouTitle: nonBlank(json["thankYouTitle"]?.stringValue),
             thankYouMessage: nonBlank(json["thankYouMessage"]?.stringValue),
             submitLabel: nonBlank(json["submitLabel"]?.stringValue),

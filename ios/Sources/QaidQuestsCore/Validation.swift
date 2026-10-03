@@ -9,14 +9,15 @@ package enum QuestValidation {
         switch question.kind {
         case .text(let options):
             guard question.required else { return nil }
+            // JavaScript's trim and UTF-16 length, as the web embed (and Android) measure.
             let trimmed: String
             if case .string(let typed)? = value {
-                trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+                trimmed = JSText.trim(typed)
             } else {
                 trimmed = ""
             }
             let minLength = options.minLength ?? 0
-            guard trimmed.isEmpty || trimmed.count < minLength else { return nil }
+            guard trimmed.isEmpty || trimmed.utf16.count < minLength else { return nil }
             // The web embed names the length whenever one is set, even for an empty field.
             return minLength > 0 ? text.minLengthMessage(minLength) : text.validationRequired
         case .currency(let options):
@@ -39,13 +40,45 @@ package enum QuestValidation {
     }
 }
 
+/// JavaScript's whitespace (what `trim()` strips), which the web embed's `required` check and
+/// visibleIf's "answered" use. Foundation's `whitespacesAndNewlines` differs: it lacks U+FEFF
+/// and adds U+0085. Android uses the same set.
+package enum JSText {
+    package static let spaces = CharacterSet(charactersIn:
+        "\t\n\u{0B}\u{0C}\r \u{A0}\u{1680}\u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}"
+            + "\u{2008}\u{2009}\u{200A}\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}\u{FEFF}")
+
+    package static func trim(_ text: String) -> String {
+        text.trimmingCharacters(in: spaces)
+    }
+
+    package static func isBlank(_ text: String) -> Bool {
+        text.unicodeScalars.allSatisfy(spaces.contains)
+    }
+
+    /// HTML `maxlength`, in UTF-16 units as the web counts. An emoji that would straddle
+    /// the cap is left out whole rather than cut in half.
+    package static func clip(_ text: String, maxLength: Int?) -> String {
+        guard let maxLength, text.utf16.count > maxLength else { return text }
+        var out = String.UnicodeScalarView()
+        var units = 0
+        for scalar in text.unicodeScalars {
+            units += UTF16.width(scalar)
+            if units > maxLength { break }
+            out.append(scalar)
+        }
+        return String(out)
+    }
+}
+
 /// The range slider's arithmetic, as an HTML `<input type=range>` does it.
 package enum RangeMath {
     /// Snapped to the step grid from `min`, clamped to `min` and the last step that
-    /// fits under `max`. Rounded to 10 places so 0.1 steps don't drift.
+    /// fits under `max` (with a hair of tolerance, so 0…0.3 by 0.1 reaches 0.3, as on
+    /// Android). Rounded to 10 places so 0.1 steps don't drift.
     package static func snap(_ value: Double, options: RangeOptions) -> Double {
         let steps = ((value - options.min) / options.step).rounded(.toNearestOrAwayFromZero)
-        let last = options.min + ((options.max - options.min) / options.step).rounded(.down) * options.step
+        let last = options.min + ((options.max - options.min) / options.step + 1e-9).rounded(.down) * options.step
         let snapped = Swift.min(Swift.max(options.min + steps * options.step, options.min), last)
         return (snapped * 1e10).rounded() / 1e10
     }

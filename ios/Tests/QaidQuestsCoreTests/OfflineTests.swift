@@ -103,7 +103,7 @@ final class OfflineStoreTests: XCTestCase {
 final class OfflineFlusherTests: XCTestCase {
     var root: URL!
     var store: OfflineQuestStore!
-    var reports: [QaidQuestsErrorReport] = []
+    var reports: [QaidQuestsErrorEvent] = []
 
     override func setUp() {
         root = temporaryDirectory()

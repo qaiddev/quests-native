@@ -1,6 +1,7 @@
 package dev.qaid.quests.core
 
 import java.math.BigDecimal
+import java.text.DecimalFormatSymbols
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.format.DateTimeParseException
@@ -13,17 +14,18 @@ import kotlin.math.roundToLong
  * The web embed's client-side checks and their exact messages, run on Next only. Formats
  * (email, url, tel), date bounds and currency decimals are not checked, as on the web.
  */
-object QuestValidation {
+internal object QuestValidation {
     /** The error to show, or null when [value] may go on. */
     fun message(question: Question, value: QuestAnswer, text: QaidQuestText): String? = when (question) {
         is TextQuestion -> {
-            val v = (value as? QuestAnswer.Text)?.value.orEmpty().trim()
+            // JavaScript's trim and UTF-16 length, as the web embed measures.
+            val v = JsText.trim((value as? QuestAnswer.Text)?.value.orEmpty())
             val min = question.minLength ?: 0
             when {
                 !question.required || (v.isNotEmpty() && v.length >= min) -> null
                 // The web shows the length message even for an empty field when a minimum is set.
-                min > 0 -> text.fill(text.errorMinLength, min)
-                else -> text.errorRequired
+                min > 0 -> text.minLengthMessage(min)
+                else -> text.validationRequired
             }
         }
         is CurrencyQuestion -> {
@@ -33,38 +35,68 @@ object QuestValidation {
             } else {
                 (question.min == null || v >= question.min) && (question.max == null || v <= question.max)
             }
-            if (ok) null else text.errorAmount
+            if (ok) null else text.validationAmount
         }
-        is DateQuestion -> if (question.required && !value.isAnswered) text.errorDate else null
+        is DateQuestion -> if (question.required && !value.isAnswered) text.validationDate else null
         is ChoiceQuestion -> when {
             !question.required || value.isAnswered -> null
-            question.multiple -> text.errorOptions
-            else -> text.errorOption
+            question.multiple -> text.validationSelectMany
+            else -> text.validationSelectOne
         }
         // A range always holds a value; an unsupported question never blocks.
         is RangeQuestion, is UnknownQuestion -> null
     }
 }
 
+/**
+ * JavaScript's whitespace (what `trim()` strips), which the web embed's `required` check and
+ * visibleIf's "answered" use. Kotlin's own set differs: it lacks U+FEFF and adds U+001C–U+001F.
+ * iOS uses the same set.
+ */
+internal object JsText {
+    private const val SPACES = "\t\n\u000B\u000C\r \u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006" +
+        "\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF"
+
+    fun isSpace(c: Char): Boolean = SPACES.indexOf(c) >= 0
+
+    fun trim(value: String): String = value.trim(::isSpace)
+
+    fun isBlank(value: String): Boolean = value.all(::isSpace)
+}
+
 /** A text field's typing rules. */
-object TextRules {
-    /** HTML `maxlength`: typing stops at the cap. */
-    fun clip(value: String, maxLength: Int?): String =
-        if (maxLength != null && value.length > maxLength) value.take(maxLength) else value
+internal object TextRules {
+    /**
+     * HTML `maxlength`, in UTF-16 units as the web counts: typing stops at the cap. An emoji
+     * that would straddle it is left out whole rather than cut in half.
+     */
+    fun clip(value: String, maxLength: Int?): String {
+        if (maxLength == null || value.length <= maxLength) return value
+        val cut = value.take(maxLength)
+        return if (cut.last().isHighSurrogate()) cut.dropLast(1) else cut
+    }
 }
 
 /** A currency field: what is typed → the number sent, and the symbol shown before it. */
-object CurrencyRules {
+internal object CurrencyRules {
     /**
      * `""` → null; a finite number → itself; anything else → null, as `Number(input.value)`
-     * on an `<input type=number>`. A comma counts as the decimal point when there is no dot,
-     * for keyboards that offer only a comma.
+     * on an `<input type=number>`. The locale's decimal separator and `.` are both read as the
+     * decimal point; a grouping separator ("1,000" in English) makes it unreadable, so null is
+     * sent, as on iOS and the web.
      */
-    fun parse(raw: String): Double? {
-        val trimmed = raw.trim()
-        val normalized = if ('.' !in trimmed) trimmed.replace(',', '.') else trimmed
+    fun parse(raw: String, decimalSeparator: Char): Double? {
+        val trimmed = JsText.trim(raw)
+        val normalized = if (decimalSeparator != '.') trimmed.replace(decimalSeparator, '.') else trimmed
+        // Only plain decimals: the JVM would also read "1d", "0x1p3" and "Infinity".
+        if (!DECIMAL.matches(normalized)) return null
         return normalized.toDoubleOrNull()?.takeIf { it.isFinite() }
     }
+
+    private val DECIMAL = Regex("-?(\\d+\\.?\\d*|\\.\\d+)")
+
+    /** The decimal separator the keyboard offers in [locale]. */
+    fun decimalSeparator(locale: Locale): Char = DecimalFormatSymbols.getInstance(locale).decimalSeparator
 
     /** Keeps what a decimal field may hold: digits, one separator, a leading minus. */
     fun sanitize(raw: String): String {
@@ -106,7 +138,7 @@ object CurrencyRules {
 }
 
 /** A range's slider maths, matching how a browser's `<input type=range>` snaps. */
-object RangeRules {
+internal object RangeRules {
     /** The starting value: [RangeQuestion.defaultValue] or the minimum, snapped to the grid. */
     fun initial(q: RangeQuestion): Double = snap(q, q.defaultValue ?: q.min)
 
@@ -130,7 +162,7 @@ object RangeRules {
 }
 
 /** Numbers as JavaScript prints them: `5`, `2.5`, `-0.25`. */
-object NumberText {
+internal object NumberText {
     fun format(value: Double): String =
         if (value == floor(value) && kotlin.math.abs(value) < 1e15) {
             value.toLong().toString()
@@ -140,7 +172,7 @@ object NumberText {
 }
 
 /** A date answer's wire form, `YYYY-MM-DD`, and the UTC midnight a Material date picker uses. */
-object DateRules {
+internal object DateRules {
     fun parse(value: String?): LocalDate? = value?.let {
         try {
             LocalDate.parse(it)

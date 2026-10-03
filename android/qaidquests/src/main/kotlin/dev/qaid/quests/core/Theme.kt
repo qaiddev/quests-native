@@ -11,9 +11,9 @@ import kotlin.math.roundToInt
  * `unstyled` have no native meaning (there is no stylesheet to add to or strip) and are
  * ignored; [ignoredCss] and [unstyled] are kept only so the SDK can say so in its log.
  */
-data class QuestThemeDoc(
+internal data class QuestThemeDoc(
     val preset: String? = null,
-    val mode: QaidQuestThemeMode? = null,
+    val mode: QaidQuestTheme.Mode? = null,
     val tokens: Map<String, String> = emptyMap(),
     val ignoredCss: Boolean = false,
     val unstyled: Boolean = false,
@@ -38,23 +38,23 @@ data class QuestThemeDoc(
             )
         }
 
-        fun mode(raw: String?): QaidQuestThemeMode? = when (raw) {
-            "light" -> QaidQuestThemeMode.LIGHT
-            "dark" -> QaidQuestThemeMode.DARK
-            "auto" -> QaidQuestThemeMode.AUTO
+        fun mode(raw: String?): QaidQuestTheme.Mode? = when (raw) {
+            "light" -> QaidQuestTheme.Mode.LIGHT
+            "dark" -> QaidQuestTheme.Mode.DARK
+            "auto" -> QaidQuestTheme.Mode.AUTO
             else -> null
         }
     }
 }
 
 /** A corner radius in dp, or a percentage of the shape's size (`50%` = round). */
-data class CssRadius(val value: Float, val isPercent: Boolean = false)
+internal data class CssRadius(val value: Float, val isPercent: Boolean = false)
 
 /** Padding in dp. */
-data class Insets(val vertical: Float, val horizontal: Float)
+internal data class Insets(val vertical: Float, val horizontal: Float)
 
 /** One mode's colours, ARGB. */
-data class QuestColors(
+internal data class QuestColors(
     val accent: Int,
     val accentText: Int,
     val error: Int,
@@ -86,7 +86,7 @@ data class QuestColors(
 )
 
 /** Sizes in dp, and the base text size in sp that every `em` size scales from. */
-data class QuestMetrics(
+internal data class QuestMetrics(
     val fontSize: Float,
     val cardRadius: CssRadius,
     val cardPadding: Float,
@@ -104,8 +104,8 @@ data class QuestMetrics(
 )
 
 /** The resolved look: both modes' colours, so `auto` can follow the system as it changes. */
-data class QuestStyle(
-    val mode: QaidQuestThemeMode,
+internal data class QuestStyle(
+    val mode: QaidQuestTheme.Mode,
     val light: QuestColors,
     val dark: QuestColors,
     val metrics: QuestMetrics,
@@ -113,9 +113,9 @@ data class QuestStyle(
     val fontFamilies: List<String>,
 ) {
     fun isDark(systemDark: Boolean): Boolean = when (mode) {
-        QaidQuestThemeMode.LIGHT -> false
-        QaidQuestThemeMode.DARK -> true
-        QaidQuestThemeMode.AUTO -> systemDark
+        QaidQuestTheme.Mode.LIGHT -> false
+        QaidQuestTheme.Mode.DARK -> true
+        QaidQuestTheme.Mode.AUTO -> systemDark
     }
 
     fun colors(systemDark: Boolean): QuestColors = if (isDark(systemDark)) dark else light
@@ -127,7 +127,7 @@ data class QuestStyle(
  * for the same key, as on the web), then the host's own values. `var()` and `light-dark()`
  * resolve per mode, so a token derived from the accent follows a new accent.
  */
-object QuestStyles {
+internal object QuestStyles {
     /** `styles-shadow.css`'s defaults (auto mode). */
     val DEFAULT_TOKENS: Map<String, String> = mapOf(
         "--qaid-q-card-bg" to "light-dark(#ffffff, #1f2937)",
@@ -208,11 +208,11 @@ object QuestStyles {
     fun build(doc: QuestThemeDoc?, host: QaidQuestTheme?): QuestStyle {
         val tokens = HashMap(DEFAULT_TOKENS)
         doc?.tokens.orEmpty().forEach { (key, value) -> if (value.isNotBlank()) tokens[key] = value }
-        PRESETS[host?.preset ?: doc?.preset ?: "default"]?.let(tokens::putAll)
+        PRESETS[host?.preset?.cssName ?: doc?.preset ?: "default"]?.let(tokens::putAll)
         if (host != null) applyHost(tokens, host)
         val light = Resolver(tokens, dark = false)
         return QuestStyle(
-            mode = host?.mode ?: doc?.mode ?: QaidQuestThemeMode.AUTO,
+            mode = host?.mode ?: doc?.mode ?: QaidQuestTheme.Mode.AUTO,
             light = light.colors(),
             dark = Resolver(tokens, dark = true).colors(),
             metrics = light.metrics(),
@@ -305,7 +305,7 @@ object QuestStyles {
  * Just enough CSS to read qaid's theme tokens: `var()`, `light-dark()`, hex / `rgb()` /
  * `color-mix(in srgb, …)` colours, px / rem / em lengths, padding shorthands, font lists.
  */
-object Css {
+internal object Css {
     private const val MAX_DEPTH = 16
     private const val MAX_STEPS = 64
     private const val ROOT_PX = 16f

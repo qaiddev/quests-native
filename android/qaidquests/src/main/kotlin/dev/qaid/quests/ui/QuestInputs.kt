@@ -21,7 +21,6 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
@@ -34,6 +33,17 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextFieldLabelPosition
+import androidx.compose.material3.TextFieldLabelScope
+import androidx.compose.foundation.text.input.InputTransformation
+import androidx.compose.foundation.text.input.KeyboardActionHandler
+import androidx.compose.foundation.text.input.TextFieldBuffer
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.drop
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -55,11 +65,12 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.error
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.text
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.qaid.quests.core.ChoiceOption
@@ -109,6 +120,17 @@ private fun Modifier.questControl(question: Question, error: String?, extra: Str
     error?.let { error(it) }
 }
 
+/** A typing field's error. Its name comes from [fieldName]: a content description would hide what was typed from TalkBack. */
+private fun Modifier.fieldError(error: String?) = semantics { error?.let { error(it) } }
+
+/**
+ * A field's name, through the text field's own label slot (which TalkBack reads together with
+ * the typed text). The question's label is already drawn above, so this one takes no room.
+ */
+private fun fieldName(question: Question): @Composable TextFieldLabelScope.() -> Unit = {
+    Box(Modifier.size(0.dp).semantics { text = AnnotatedString(question.label) })
+}
+
 @Composable
 private fun fieldColors() = LocalQuestUi.current.colors.let { c ->
     OutlinedTextFieldDefaults.colors(
@@ -128,13 +150,27 @@ private fun fieldColors() = LocalQuestUi.current.colors.let { c ->
     )
 }
 
+/**
+ * Reports each change to [field]'s text, untrimmed, as the web sends it: only the person's
+ * edits, never the starting text.
+ */
+@Composable
+private fun ReportChanges(field: TextFieldState, onChange: (String) -> Unit) {
+    val report by rememberUpdatedState(onChange)
+    LaunchedEffect(field) {
+        snapshotFlow { field.text.toString() }.drop(1).collect { report(it) }
+    }
+}
+
 @Composable
 private fun TextInput(q: TextQuestion, step: QuestStep, onChange: (QuestAnswer) -> Unit, onSubmit: () -> Unit) {
     val ui = LocalQuestUi.current
-    val initial = (step.value as? QuestAnswer.Text)?.value.orEmpty()
-    // The field keeps its own text and caret (focus puts the caret at the end, as on the web);
-    // every change is reported, untrimmed, as the web sends it.
-    var field by remember(q.id) { mutableStateOf(TextFieldValue(initial, TextRange(initial.length))) }
+    // The field keeps its own text and caret (focus puts the caret at the end, as on the web).
+    val field = remember(q.id) {
+        val initial = (step.value as? QuestAnswer.Text)?.value.orEmpty()
+        TextFieldState(initial, TextRange(initial.length))
+    }
+    ReportChanges(field) { onChange(QuestAnswer.Text(it)) }
     val keyboard = when {
         q.multiline -> KeyboardType.Text
         q.inputType == TextInputType.EMAIL -> KeyboardType.Email
@@ -143,51 +179,52 @@ private fun TextInput(q: TextQuestion, step: QuestStep, onChange: (QuestAnswer) 
         else -> KeyboardType.Text
     }
     OutlinedTextField(
-        value = field,
-        onValueChange = { next ->
-            val clipped = TextRules.clip(next.text, q.maxLength)
-            val changed = clipped != field.text
-            field = if (clipped == next.text) next else TextFieldValue(clipped, TextRange(clipped.length))
-            if (changed) onChange(QuestAnswer.Text(clipped))
-        },
-        modifier = Modifier.fillMaxWidth().testTag(QaidQuestTags.TEXT).questControl(q, step.error),
+        state = field,
+        modifier = Modifier.fillMaxWidth().testTag(QaidQuestTags.TEXT).fieldError(step.error),
+        labelPosition = TextFieldLabelPosition.Above(),
+        label = fieldName(q),
         placeholder = q.placeholder?.let { { Text(it) } },
-        singleLine = !q.multiline,
-        minLines = if (q.multiline) 4 else 1,
         isError = step.error != null,
+        // HTML maxlength: typing (or pasting) stops at the cap.
+        inputTransformation = q.maxLength?.let { max -> InputTransformation { replaceAll(TextRules.clip(toString(), max)) } },
+        lineLimits = if (q.multiline) TextFieldLineLimits.MultiLine(minHeightInLines = 4) else TextFieldLineLimits.SingleLine,
         shape = ui.metrics.inputRadius.shape(),
         colors = fieldColors(),
         textStyle = androidx.compose.material3.LocalTextStyle.current.copy(color = ui.colors.inputFg.color()),
         // Enter moves on from a single-line field; a multiline one takes newlines.
         keyboardOptions = KeyboardOptions(keyboardType = keyboard, imeAction = if (q.multiline) ImeAction.Default else ImeAction.Next),
-        keyboardActions = KeyboardActions(onNext = { onSubmit() }),
+        onKeyboardAction = if (q.multiline) null else KeyboardActionHandler { onSubmit() },
     )
 }
 
 @Composable
 private fun CurrencyInput(q: CurrencyQuestion, step: QuestStep, onChange: (QuestAnswer) -> Unit, onSubmit: () -> Unit) {
     val ui = LocalQuestUi.current
-    var raw by remember(q.id) { mutableStateOf(CurrencyRules.display((step.value as? QuestAnswer.Number)?.value)) }
+    val field = remember(q.id) { TextFieldState(CurrencyRules.display((step.value as? QuestAnswer.Number)?.value)) }
     val symbol = remember(q.currency, q.locale) { CurrencyRules.symbol(q.currency, CurrencyRules.locale(q.locale, Locale.getDefault())) }
+    // What the keyboard offers is the device's separator, whatever the question's locale.
+    val separator = remember { CurrencyRules.decimalSeparator(Locale.getDefault()) }
+    ReportChanges(field) { typed -> onChange(CurrencyRules.parse(typed, separator)?.let { QuestAnswer.Number(it) } ?: QuestAnswer.None) }
     OutlinedTextField(
-        value = raw,
-        onValueChange = { typed ->
-            val clean = CurrencyRules.sanitize(typed)
-            if (clean != raw) {
-                raw = clean
-                onChange(CurrencyRules.parse(clean)?.let { QuestAnswer.Number(it) } ?: QuestAnswer.None)
-            }
-        },
-        modifier = Modifier.fillMaxWidth().testTag(QaidQuestTags.CURRENCY).questControl(q, step.error),
+        state = field,
+        modifier = Modifier.fillMaxWidth().testTag(QaidQuestTags.CURRENCY).fieldError(step.error),
+        labelPosition = TextFieldLabelPosition.Above(),
+        label = fieldName(q),
         prefix = { Text(symbol) },
         placeholder = q.placeholder?.let { { Text(it) } },
-        singleLine = true,
         isError = step.error != null,
+        inputTransformation = InputTransformation { replaceAll(CurrencyRules.sanitize(toString())) },
+        lineLimits = TextFieldLineLimits.SingleLine,
         shape = ui.metrics.inputRadius.shape(),
         colors = fieldColors(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
-        keyboardActions = KeyboardActions(onNext = { onSubmit() }),
+        onKeyboardAction = KeyboardActionHandler { onSubmit() },
     )
+}
+
+/** Replaces the whole buffer only when [text] differs, so an edit that passes keeps its caret. */
+private fun TextFieldBuffer.replaceAll(text: String) {
+    if (text != toString()) replace(0, length, text)
 }
 
 @Composable
@@ -247,7 +284,7 @@ private fun DateInput(state: QuestViewState, q: DateQuestion, step: QuestStep, o
             )
         }
         if (date != null && !q.required) {
-            TextButton(onClick = { onChange(QuestAnswer.None) }) { Text(text.dateClear, color = c.secondaryFg.color()) }
+            TextButton(onClick = { onChange(QuestAnswer.None) }) { Text(text.clearDate, color = c.secondaryFg.color()) }
         }
     }
     if (open) {

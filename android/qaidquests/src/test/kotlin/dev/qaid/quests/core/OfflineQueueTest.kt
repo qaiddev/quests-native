@@ -1,5 +1,6 @@
 package dev.qaid.quests.core
 
+import dev.qaid.quests.core.QaidQuestsErrorEvent.Operation as Op
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -22,7 +23,7 @@ class OfflineQueueTest {
         responseId: String? = null,
         patches: List<PendingPatch> = listOf(PendingPatch("a", QuestAnswer.Text("x")), PendingPatch("b", QuestAnswer.None)),
         submit: String? = """{"answers":{}}""",
-    ) = PendingResponse(id, createdAt, "https://qaid.dev/api/quests", "ua", responseId, """{"questId":"q"}""", patches, submit)
+    ) = PendingResponse(id, createdAt, "quest1", "https://qaid.dev/api/quests", "ua", responseId, """{"questId":"q"}""", patches, submit)
 
     @Test fun encodesAndDecodes() {
         val p = pending("p1", patches = listOf(PendingPatch("a", QuestAnswer.Choices(listOf("x"))), PendingPatch("n", QuestAnswer.Number(2.0))))
@@ -32,7 +33,9 @@ class OfflineQueueTest {
         assertNull(PendingResponse.decode("nope"))
         assertNull(PendingResponse.decode("""{"v":2}"""))
         assertNull(PendingResponse.decode("""{"v":1,"id":"x","createdAt":1,"base":"b","patches":[]}"""))
-        assertEquals("", PendingResponse.decode("""{"v":1,"id":"x","createdAt":1,"base":"b","responseId":"r","createBody":"{}","patches":[]}""")?.userAgent)
+        val old = PendingResponse.decode("""{"v":1,"id":"x","createdAt":1,"base":"b","responseId":"r","createBody":"{}","patches":[]}""")
+        assertEquals("", old?.userAgent)
+        assertEquals("", old?.questId)
     }
 
     @Test fun policyDropsOldFutureAndOverflow() {
@@ -124,27 +127,33 @@ class OfflineQueueTest {
 
     @Test fun refusedCallsAreDroppedAndReported() = runTest {
         val store = PendingStore(tmp.newFolder()) { now }
-        val refused = mutableListOf<QuestOperation>()
+        val events = mutableListOf<QaidQuestsErrorEvent>()
+        val refused: (QaidQuestsErrorEvent) -> Unit = { events += it }
         store.save(pending("create", createdAt = now - 4))
-        PendingFlusher(store, FakeTransport { HttpResponse(401, """{"error":"Invalid API key"}""") }) { op, _ -> refused += op }.flush()
-        assertEquals(listOf(QuestOperation.CREATE_RESPONSE), refused)
+        PendingFlusher(store, FakeTransport { HttpResponse(401, """{"error":"Invalid API key"}""") }, onRefused = refused).flush()
+        assertEquals(
+            listOf(QaidQuestsErrorEvent("quest1", Op.CREATE_RESPONSE, error = QaidQuestsError.Rejected(401, "Invalid API key"))),
+            events,
+        )
         assertTrue(store.loadAll().isEmpty())
 
         store.save(pending("noid"))
-        PendingFlusher(store, FakeTransport { HttpResponse(201, "{}") }) { op, _ -> refused += op }.flush()
+        PendingFlusher(store, FakeTransport { HttpResponse(201, "{}") }, onRefused = refused).flush()
         assertTrue(store.loadAll().isEmpty())
 
         store.save(pending("patch", responseId = "r"))
-        var sent = PendingFlusher(store, FakeTransport { r -> if (r.method == "PATCH") HttpResponse(400, "") else HttpResponse(200, "") }) { op, _ -> refused += op }.flush()
+        var sent = PendingFlusher(store, FakeTransport { r -> if (r.method == "PATCH") HttpResponse(400, "") else HttpResponse(200, "") }, onRefused = refused).flush()
         assertEquals(1, sent)
 
         store.save(pending("submit", responseId = "r", patches = emptyList()))
-        sent = PendingFlusher(store, FakeTransport { HttpResponse(410, """{"error":"Quest is archived"}""") }) { op, _ -> refused += op }.flush()
+        sent = PendingFlusher(store, FakeTransport { HttpResponse(410, """{"error":"Quest is archived"}""") }, onRefused = refused).flush()
         assertEquals(0, sent)
         assertEquals(
-            listOf(QuestOperation.CREATE_RESPONSE, QuestOperation.CREATE_RESPONSE, QuestOperation.SAVE_ANSWER, QuestOperation.SAVE_ANSWER, QuestOperation.SUBMIT),
-            refused,
+            listOf(Op.CREATE_RESPONSE, Op.CREATE_RESPONSE, Op.SAVE_ANSWER, Op.SAVE_ANSWER, Op.SUBMIT),
+            events.map { it.operation },
         )
+        assertEquals(listOf(null, null, "a", "b", null), events.map { it.questionId })
+        assertTrue(events.all { it.questId == "quest1" })
         assertTrue(store.loadAll().isEmpty())
     }
 }

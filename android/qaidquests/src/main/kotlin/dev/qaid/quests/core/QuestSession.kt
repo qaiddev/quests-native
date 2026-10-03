@@ -5,7 +5,7 @@ package dev.qaid.quests.core
  * question per step; [index] points into the *visible* questions, which are recomputed on
  * every answer. Validation runs on Next only; Back never validates. Not thread-safe.
  */
-class QuestSession(
+internal class QuestSession(
     val quest: Questionnaire,
     private val text: QaidQuestText,
     private val effects: Effects,

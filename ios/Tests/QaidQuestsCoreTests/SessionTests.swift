@@ -182,7 +182,7 @@ final class SessionTests: XCTestCase {
         var s = session(quest)
         _ = s.next()
         let effects = s.submitFinished(.savedOffline)
-        XCTAssertEqual(effects[1], .announce("Ta. See you. Saved. Your answers will send when you're back online."))
+        XCTAssertEqual(effects[1], .announce("Ta. See you. Your answers are saved on this device and will be sent when you're back online."))
         XCTAssertEqual(s.phase, .done(savedOffline: true))
     }
 

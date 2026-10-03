@@ -53,11 +53,12 @@ package enum QuestVisibility {
         }
     }
 
-    /// Not null, not a whitespace-only string, not an empty list. `0` is an answer.
+    /// Not null, not a whitespace-only string (JavaScript's whitespace), not an empty list.
+    /// `0` is an answer.
     package static func isAnswered(_ value: QuestAnswer?) -> Bool {
         switch value {
         case nil, .null?: return false
-        case .string(let text)?: return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .string(let text)?: return !JSText.isBlank(text)
         case .strings(let list)?: return !list.isEmpty
         case .number?: return true
         }

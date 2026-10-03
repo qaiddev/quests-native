@@ -4,14 +4,12 @@ import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 
-enum class ProgressPosition { TOP, BOTTOM }
+internal enum class TextInputType { TEXT, EMAIL, TEL, URL }
 
-enum class TextInputType { TEXT, EMAIL, TEL, URL }
-
-enum class ImageAlignment { HORIZONTAL, VERTICAL }
+internal enum class ImageAlignment { HORIZONTAL, VERTICAL }
 
 /** A quest's live version, as `GET {base}/{questId}/definition` serves it. */
-data class Questionnaire(
+internal data class Questionnaire(
     /** The quest's id, which the create call posts back as `questId`. */
     val id: String,
     val slug: String? = null,
@@ -21,7 +19,7 @@ data class Questionnaire(
     val description: String? = null,
     val hideTitle: Boolean = false,
     val hideProgress: Boolean = false,
-    val progressPosition: ProgressPosition? = null,
+    val progressPosition: QaidQuestProgressPosition? = null,
     val thankYouTitle: String? = null,
     val thankYouMessage: String? = null,
     val submitLabel: String? = null,
@@ -31,7 +29,7 @@ data class Questionnaire(
 )
 
 /** What every question type shares. */
-sealed interface Question {
+internal sealed interface Question {
     val id: String
     val label: String
     val description: String?
@@ -39,7 +37,7 @@ sealed interface Question {
     val visibleIf: VisibilityRule?
 }
 
-data class TextQuestion(
+internal data class TextQuestion(
     override val id: String,
     override val label: String,
     override val description: String? = null,
@@ -55,7 +53,7 @@ data class TextQuestion(
     val inputType: TextInputType = TextInputType.TEXT,
 ) : Question
 
-data class CurrencyQuestion(
+internal data class CurrencyQuestion(
     override val id: String,
     override val label: String,
     override val description: String? = null,
@@ -69,7 +67,7 @@ data class CurrencyQuestion(
     val placeholder: String? = null,
 ) : Question
 
-data class RangeQuestion(
+internal data class RangeQuestion(
     override val id: String,
     override val label: String,
     override val description: String? = null,
@@ -82,7 +80,7 @@ data class RangeQuestion(
     val unit: String? = null,
 ) : Question
 
-data class DateQuestion(
+internal data class DateQuestion(
     override val id: String,
     override val label: String,
     override val description: String? = null,
@@ -93,14 +91,14 @@ data class DateQuestion(
     val max: String? = null,
 ) : Question
 
-data class ChoiceOption(
+internal data class ChoiceOption(
     val value: String,
     val label: String,
     val description: String? = null,
     val image: String? = null,
 )
 
-data class ChoiceQuestion(
+internal data class ChoiceQuestion(
     override val id: String,
     override val label: String,
     override val description: String? = null,
@@ -118,7 +116,7 @@ data class ChoiceQuestion(
  * A question this SDK version can't draw: a type added to qaid after it shipped, or a known
  * type whose options are unusable. See [Unsupported].
  */
-data class UnknownQuestion(
+internal data class UnknownQuestion(
     override val id: String,
     override val label: String,
     override val description: String? = null,
@@ -132,18 +130,18 @@ data class UnknownQuestion(
  * shown as a card saying so, never blocks Next (not required), and its answer stays unset, so
  * nothing is sent for it. Change the policy here and every caller follows.
  */
-object Unsupported {
+internal object Unsupported {
     fun isUnsupported(question: Question): Boolean = question is UnknownQuestion
 }
 
-class QuestDecodeException(val detail: String) : Exception(detail)
+internal class QuestDecodeException(val detail: String) : Exception(detail)
 
 /**
  * Lenient decoding: unknown fields are ignored, a question with no id is dropped, an unknown
  * type becomes [UnknownQuestion]. Only an unreadable body or no questions at all fail, with
  * the web embed's messages.
  */
-object QuestDecoder {
+internal object QuestDecoder {
     fun questionnaire(raw: String, fallbackId: String): Questionnaire {
         val obj = try {
             JSONObject(raw)
@@ -173,9 +171,9 @@ object QuestDecoder {
         )
     }
 
-    fun progressPosition(raw: String?): ProgressPosition? = when (raw) {
-        "top" -> ProgressPosition.TOP
-        "bottom" -> ProgressPosition.BOTTOM
+    fun progressPosition(raw: String?): QaidQuestProgressPosition? = when (raw) {
+        "top" -> QaidQuestProgressPosition.TOP
+        "bottom" -> QaidQuestProgressPosition.BOTTOM
         else -> null
     }
 

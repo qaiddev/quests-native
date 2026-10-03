@@ -35,18 +35,18 @@ data class QaidQuestsConfig(
     /** Move on 180 ms after a single-choice pick, as the web embed's `autoAdvance`. */
     val autoAdvance: Boolean = false,
     /** Overrides the quest's own progress position. */
-    val progressPosition: ProgressPosition? = null,
+    val progressPosition: QaidQuestProgressPosition? = null,
     /** The visitor id to send; null shares the feedback SDK's per-install id. */
     val visitorId: String? = null,
     /** How long typing settles before an answer is saved. */
     val saveDebounceMs: Long = 500,
 ) {
     /** [pageUrl], or `app://<packageName>` (lower case, as iOS sends its bundle id) when the app set none. */
-    fun pageUrlBase(packageName: String): String =
+    internal fun pageUrlBase(packageName: String): String =
         pageUrl?.takeIf { it.isNotBlank() } ?: "app://${packageName.lowercase()}"
 
     /** `GET` this for a saved theme, or null when none is set. */
-    fun themeUrl(): String? {
+    internal fun themeUrl(): String? {
         val id = themeId.orEmpty().trim()
         if (id.isEmpty()) return null
         val version = themeVersion
@@ -58,7 +58,7 @@ data class QaidQuestsConfig(
         const val DEFAULT_BASE = "https://qaid.dev/api/quests"
 
         /** `scheme://host[:port]` of [url]; qaid.dev's when it has none. */
-        fun originOf(url: String): String {
+        internal fun originOf(url: String): String {
             val uri = runCatching { URI(url.trim()) }.getOrNull()
             val scheme = uri?.scheme ?: return "https://qaid.dev"
             val host = uri.host ?: return "https://qaid.dev"
@@ -69,7 +69,8 @@ data class QaidQuestsConfig(
     }
 }
 
-enum class QaidQuestThemeMode { AUTO, LIGHT, DARK }
+/** Where the progress bar goes: over the question, or in the footer. */
+enum class QaidQuestProgressPosition { TOP, BOTTOM }
 
 /**
  * The app's own look, layered over a saved theme (or qaid's defaults). Colours are ARGB ints
@@ -89,7 +90,16 @@ data class QaidQuestTheme(
     /** One radius in dp for the card, buttons, options and fields. */
     val cornerRadius: Float? = null,
     /** Light, dark, or follow the system. */
-    val mode: QaidQuestThemeMode? = null,
-    /** `default`, `minimal`, `pill` or `dense`, as in qaid's theme editor. */
-    val preset: String? = null,
-)
+    val mode: Mode? = null,
+    val preset: Preset? = null,
+) {
+    enum class Mode { AUTO, LIGHT, DARK }
+
+    /** qaid's theme editor presets. */
+    enum class Preset {
+        DEFAULT, MINIMAL, PILL, DENSE;
+
+        /** The name a theme document uses. */
+        internal val cssName: String get() = name.lowercase(java.util.Locale.ROOT)
+    }
+}

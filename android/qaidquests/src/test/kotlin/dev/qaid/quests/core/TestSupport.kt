@@ -3,7 +3,7 @@ package dev.qaid.quests.core
 import java.io.IOException
 
 /** A scripted server: records every request and answers through [respond]. */
-class FakeTransport(var respond: (HttpRequest) -> HttpResponse = ::defaultResponse) : QuestTransport {
+internal class FakeTransport(var respond: (HttpRequest) -> HttpResponse = ::defaultResponse) : QuestTransport {
     val requests = mutableListOf<HttpRequest>()
 
     override suspend fun send(request: HttpRequest): HttpResponse {
@@ -27,7 +27,7 @@ class FakeTransport(var respond: (HttpRequest) -> HttpResponse = ::defaultRespon
     }
 }
 
-const val SAMPLE_QUEST = """
+internal const val SAMPLE_QUEST = """
 {
   "id": "quest1", "slug": "s", "versionId": "v1", "versionNumber": 2,
   "title": "Tell us", "description": "Two minutes",
@@ -40,17 +40,17 @@ const val SAMPLE_QUEST = """
 }
 """
 
-fun quest(vararg questions: Question, configure: (Questionnaire) -> Questionnaire = { it }) =
+internal fun quest(vararg questions: Question, configure: (Questionnaire) -> Questionnaire = { it }) =
     configure(Questionnaire(id = "q", questions = questions.toList()))
 
-fun text(id: String, required: Boolean = false, rule: VisibilityRule? = null, minLength: Int? = null) =
+internal fun text(id: String, required: Boolean = false, rule: VisibilityRule? = null, minLength: Int? = null) =
     TextQuestion(id, id, required = required, visibleIf = rule, minLength = minLength)
 
-fun choice(id: String, vararg values: String, multiple: Boolean = false, required: Boolean = false, rule: VisibilityRule? = null) =
+internal fun choice(id: String, vararg values: String, multiple: Boolean = false, required: Boolean = false, rule: VisibilityRule? = null) =
     ChoiceQuestion(id, id, required = required, visibleIf = rule, options = values.map { ChoiceOption(it, it) }, multiple = multiple)
 
 /** Records what a session asks of the response traffic. */
-class RecordingEffects : QuestSession.Effects {
+internal class RecordingEffects : QuestSession.Effects {
     val saves = mutableListOf<Triple<String, QuestAnswer, Boolean>>()
     var flushes = 0
     override fun save(questionId: String, value: QuestAnswer, immediate: Boolean) {

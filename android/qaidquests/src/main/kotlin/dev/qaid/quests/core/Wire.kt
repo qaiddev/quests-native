@@ -6,56 +6,73 @@ import kotlinx.coroutines.CancellationException
 import java.io.IOException
 
 /** One HTTP call, built in Core so its shape is tested without a network. */
-data class HttpRequest(
+internal data class HttpRequest(
     val method: String,
     val url: String,
     val headers: Map<String, String> = emptyMap(),
     val body: String? = null,
 )
 
-data class HttpResponse(val status: Int, val body: String)
+internal data class HttpResponse(val status: Int, val body: String)
 
 /**
  * The network, injectable: the SDK's own sends over HttpURLConnection; tests script one.
  * Throws [IOException] when the server can't be reached.
  */
-fun interface QuestTransport {
+internal fun interface QuestTransport {
     suspend fun send(request: HttpRequest): HttpResponse
 }
 
-/** Why a call to qaid failed. */
-sealed class QaidQuestError(message: String) : Exception(message) {
-    /** The server couldn't be reached. */
-    data class Network(val detail: String) : QaidQuestError("network: $detail")
+/** What went wrong talking to qaid, for `QaidQuests.onError`. */
+sealed class QaidQuestsError(message: String) : Exception(message) {
+    /** The server was never reached: offline, timed out, DNS. */
+    data class Network(val detail: String) : QaidQuestsError("network: $detail")
 
-    /** The server answered [status]; [error] is its `{ "error": … }` text. */
-    data class Http(val status: Int, val error: String) : QaidQuestError("HTTP $status $error".trim())
+    /** A 5xx. Tried again with backoff, then queued. */
+    data class Server(val status: Int) : QaidQuestsError("HTTP $status")
 
-    /** The body couldn't be read. */
-    data class Decoding(val detail: String) : QaidQuestError(detail)
+    /**
+     * A 4xx: the request itself was refused (bad key, Domain Restriction, quest archived…).
+     * [message] is the server's `error` text. Never retried, except 408 and 429.
+     */
+    data class Rejected(val status: Int, override val message: String) : QaidQuestsError("HTTP $status $message".trim())
 
-    /** Answers couldn't be saved to send later. */
-    data class Storage(val detail: String) : QaidQuestError(detail)
+    /** A 2xx without what it should carry, or a body that isn't JSON. */
+    data class InvalidResponse(val detail: String) : QaidQuestsError(detail)
 
-    /** Worth trying again by itself: the network or the server, never a refused request. */
+    /** The offline queue couldn't be written. */
+    data class Storage(val detail: String) : QaidQuestsError(detail)
+
+    /** Worth trying again by itself: the network or the server, never the request. 408 and 429 mean "later". */
     val isRetryable: Boolean
-        get() = this is Network || (this is Http && (status >= 500 || status == 408 || status == 429))
+        get() = this is Network || this is Server || (this is Rejected && (status == 408 || status == 429))
+
+    internal companion object {
+        /** The error a non-2xx status means. */
+        fun of(status: Int, body: String): QaidQuestsError =
+            if (status >= 500) Server(status) else Rejected(status, QuestRequests.errorText(body))
+    }
 }
 
-/** Which call failed, for [QaidQuestErrorEvent]. */
-enum class QuestOperation { LOAD_DEFINITION, CREATE_RESPONSE, SAVE_ANSWER, SUBMIT, SEND_SAVED }
-
-/** Handed to `QaidQuests.onError`: never thrown, never blocks the person answering. */
-data class QaidQuestErrorEvent(val questId: String, val operation: QuestOperation, val error: QaidQuestError)
+/** One failure, with what the SDK was doing when it happened. Never thrown, never blocks the person answering. */
+data class QaidQuestsErrorEvent(
+    val questId: String,
+    val operation: Operation,
+    /** For [Operation.SAVE_ANSWER]. */
+    val questionId: String? = null,
+    val error: QaidQuestsError,
+) {
+    enum class Operation { LOAD_QUEST, LOAD_THEME, CREATE_RESPONSE, SAVE_ANSWER, SUBMIT, OFFLINE_QUEUE }
+}
 
 /** How often and how long to wait before trying a call again. */
-data class RetryPolicy(val delaysMs: List<Long> = listOf(1_000, 3_000)) {
+internal data class RetryPolicy(val delaysMs: List<Long> = listOf(1_000, 3_000)) {
     /** The wait before retry number [attempt] (0-based), or null to stop. */
     fun delayAfter(attempt: Int): Long? = delaysMs.getOrNull(attempt)
 }
 
 /** The quest endpoints under one `base` (`https://qaid.dev/api/quests`). */
-data class QuestEndpoints(val base: String) {
+internal data class QuestEndpoints(val base: String) {
     private val root = base.trim().trimEnd('/')
 
     fun definition(questId: String): String = "$root/${QaidQuestsConfig.encode(questId)}/definition"
@@ -64,7 +81,7 @@ data class QuestEndpoints(val base: String) {
     fun submit(id: String): String = "${response(id)}/submit"
 }
 
-object QuestRequests {
+internal object QuestRequests {
     private const val JSON = "application/json"
 
     fun get(url: String, userAgent: String): HttpRequest =
@@ -123,18 +140,18 @@ object QuestRequests {
 }
 
 /** What one call (with its retries) came to. */
-sealed interface CallOutcome {
+internal sealed interface CallOutcome {
     data class Ok(val body: String) : CallOutcome
 
     /** The server said no (4xx): sending it again won't help. */
-    data class Refused(val error: QaidQuestError) : CallOutcome
+    data class Refused(val error: QaidQuestsError) : CallOutcome
 
     /** Still offline, or the server still failing, after every retry. */
-    data class Unreachable(val error: QaidQuestError) : CallOutcome
+    data class Unreachable(val error: QaidQuestsError) : CallOutcome
 }
 
 /** Sends [request], retrying network failures and 5xx by [retry], never a 4xx. */
-suspend fun QuestTransport.call(
+internal suspend fun QuestTransport.call(
     request: HttpRequest,
     retry: RetryPolicy,
     sleep: suspend (Long) -> Unit,
@@ -144,13 +161,13 @@ suspend fun QuestTransport.call(
         val error = try {
             val response = send(request)
             if (response.status in 200..299) return CallOutcome.Ok(response.body)
-            QaidQuestError.Http(response.status, QuestRequests.errorText(response.body))
+            QaidQuestsError.of(response.status, response.body)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             // IOException is the network; anything else (a missing INTERNET permission, a
             // malformed URL) is reported the same way rather than crashing the app.
-            QaidQuestError.Network(e.message ?: e.javaClass.simpleName)
+            QaidQuestsError.Network(e.message ?: e.javaClass.simpleName)
         }
         if (!error.isRetryable) return CallOutcome.Refused(error)
         val wait = retry.delayAfter(attempt++) ?: return CallOutcome.Unreachable(error)

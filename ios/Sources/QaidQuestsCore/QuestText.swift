@@ -1,6 +1,7 @@
 import Foundation
 
-/// Every word the SDK draws itself, in English by default. Pass translations here.
+/// Every word the SDK draws itself, in English by default. Pass translations here. The same
+/// keys, with the same defaults, as Android's `QaidQuestText`.
 ///
 /// The quest's own words (title, labels, `nextLabel`, `thankYouTitle`…) come from the
 /// quest and win over these; these fill in where the quest has none, and cover what
@@ -42,6 +43,9 @@ public struct QaidQuestText: Equatable, Sendable {
     public var unsupportedQuestion: String
     public var datePlaceholder: String
     public var clearDate: String
+    /// Android's date dialog buttons; the inline picker here has none.
+    public var dateConfirm: String
+    public var dateCancel: String
     public var required: String
     public var closeForm: String
     public var progressLabel: String
@@ -65,18 +69,20 @@ public struct QaidQuestText: Equatable, Sendable {
         loadErrorStatus: String = "Failed to load questionnaire ({status})",
         loadErrorEmpty: String = "Questionnaire is empty",
         loadErrorInvalid: String = "The questionnaire couldn't be read.",
-        loadErrorOffline: String = "You seem to be offline.",
-        retry: String = "Try again",
+        loadErrorOffline: String = "Check your connection and try again.",
+        retry: String = "Retry",
         submitErrorTitle: String = "Couldn't send your answers",
         submitErrorMessage: String = "Your answers are still here. Check your connection and try again.",
         tryAgain: String = "Try again",
         sending: String = "Sending…",
         saving: String = "Saving…",
-        savedOffline: String = "Saved. Your answers will send when you're back online.",
+        savedOffline: String = "Your answers are saved on this device and will be sent when you're back online.",
         notConfigured: String = "Quests aren't set up in this build.",
         unsupportedQuestion: String = "This question can't be shown in this version of the app.",
-        datePlaceholder: String = "Choose a date",
+        datePlaceholder: String = "Pick a date",
         clearDate: String = "Clear date",
+        dateConfirm: String = "OK",
+        dateCancel: String = "Cancel",
         required: String = "required",
         closeForm: String = "Close form",
         progressLabel: String = "Progress",
@@ -111,6 +117,8 @@ public struct QaidQuestText: Equatable, Sendable {
         self.unsupportedQuestion = unsupportedQuestion
         self.datePlaceholder = datePlaceholder
         self.clearDate = clearDate
+        self.dateConfirm = dateConfirm
+        self.dateCancel = dateCancel
         self.required = required
         self.closeForm = closeForm
         self.progressLabel = progressLabel

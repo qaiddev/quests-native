@@ -15,7 +15,7 @@ class ThemeTest {
                "tokens":{"--qaid-q-accent":"#ff0000","--qaid-q-gap":5}}""",
         )
         assertEquals("pill", doc.preset)
-        assertEquals(QaidQuestThemeMode.DARK, doc.mode)
+        assertEquals(QaidQuestTheme.Mode.DARK, doc.mode)
         assertEquals(mapOf("--qaid-q-accent" to "#ff0000"), doc.tokens)
         assertTrue(doc.ignoredCss)
         assertTrue(doc.unstyled)
@@ -24,14 +24,14 @@ class ThemeTest {
         assertFalse(bare.ignoredCss)
         assertFalse(bare.unstyled)
         assertTrue(bare.tokens.isEmpty())
-        assertEquals(QaidQuestThemeMode.LIGHT, QuestThemeDoc.mode("light"))
-        assertEquals(QaidQuestThemeMode.AUTO, QuestThemeDoc.mode("auto"))
+        assertEquals(QaidQuestTheme.Mode.LIGHT, QuestThemeDoc.mode("light"))
+        assertEquals(QaidQuestTheme.Mode.AUTO, QuestThemeDoc.mode("auto"))
         assertEquals("Invalid theme", runCatching { QuestThemeDoc.decode("nope") }.exceptionOrNull()?.message)
     }
 
     @Test fun defaultsMatchTheWebStylesheet() {
         val s = QuestStyles.DEFAULT
-        assertEquals(QaidQuestThemeMode.AUTO, s.mode)
+        assertEquals(QaidQuestTheme.Mode.AUTO, s.mode)
         assertEquals(argb(0xFF10B981), s.light.accent)
         assertEquals(argb(0xFFFFFFFF), s.light.accentText)
         assertEquals(argb(0xFFEF4444), s.light.error)
@@ -61,9 +61,9 @@ class ThemeTest {
         val s = QuestStyles.DEFAULT
         assertEquals(s.light, s.colors(systemDark = false))
         assertEquals(s.dark, s.colors(systemDark = true))
-        val light = QuestStyles.build(null, QaidQuestTheme(mode = QaidQuestThemeMode.LIGHT))
+        val light = QuestStyles.build(null, QaidQuestTheme(mode = QaidQuestTheme.Mode.LIGHT))
         assertFalse(light.isDark(true))
-        val dark = QuestStyles.build(QuestThemeDoc(mode = QaidQuestThemeMode.DARK), null)
+        val dark = QuestStyles.build(QuestThemeDoc(mode = QaidQuestTheme.Mode.DARK), null)
         assertTrue(dark.isDark(false))
         assertEquals(dark.dark, dark.colors(false))
     }
@@ -98,7 +98,7 @@ class ThemeTest {
             QaidQuestTheme(
                 accent = argb(0xFFFDE047), error = argb(0xFF000001), focus = argb(0xFF000002),
                 fontFamily = "\"Georgia\", serif", fontSize = 20f, cornerRadius = 3f,
-                mode = QaidQuestThemeMode.LIGHT, preset = "minimal",
+                mode = QaidQuestTheme.Mode.LIGHT, preset = QaidQuestTheme.Preset.MINIMAL,
             ),
         )
         assertEquals(argb(0xFFFDE047), host.light.primaryBg)
@@ -111,7 +111,7 @@ class ThemeTest {
         assertEquals(CssRadius(3f), host.metrics.optionRadius)
         assertFalse(host.metrics.cardShadow) // minimal
         assertEquals(0, host.light.optionBgSelected) // minimal: transparent
-        assertEquals(QaidQuestThemeMode.LIGHT, host.mode)
+        assertEquals(QaidQuestTheme.Mode.LIGHT, host.mode)
         assertEquals(argb(0xFFFFFFFF), QuestStyles.build(null, QaidQuestTheme(accent = argb(0xFF1E3A8A))).light.primaryFg)
     }
 
@@ -219,5 +219,15 @@ class ThemeTest {
         assertEquals(0.0, Css.luminance(argb(0xFF000000)), 1e-9)
         assertEquals(listOf("a", "f(b, c)", "d"), Css.splitArgs("a, f(b, c) ,d"))
         assertNull(Css.closingParen("f(a", 1))
+    }
+
+    @Test fun everyPresetHasItsStylesheet() {
+        assertEquals(
+            listOf("default", "minimal", "pill", "dense"),
+            QaidQuestTheme.Preset.entries.map { it.cssName },
+        )
+        QaidQuestTheme.Preset.entries.forEach { assertTrue(it.cssName in QuestStyles.PRESETS) }
+        val dense = QuestStyles.build(QuestThemeDoc(preset = "pill"), QaidQuestTheme(preset = QaidQuestTheme.Preset.DENSE))
+        assertEquals(QuestStyles.build(QuestThemeDoc(preset = "dense"), null), dense)
     }
 }

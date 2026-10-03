@@ -46,6 +46,8 @@ package struct QuestSession: Equatable {
     package let quest: Questionnaire
     package let text: QaidQuestText
     package let autoAdvance: Bool
+    /// Where the progress bar goes: the app's choice, else the quest's.
+    package let progressPosition: QaidQuestProgressPosition
     package private(set) var answers: [String: QuestAnswer] = [:]
     package private(set) var currentId: String
     package private(set) var error: String?
@@ -54,10 +56,12 @@ package struct QuestSession: Equatable {
     package private(set) var retrying = false
     private var loggedUnsupported: Set<String> = []
 
-    package init(quest: Questionnaire, text: QaidQuestText, autoAdvance: Bool) {
+    package init(quest: Questionnaire, text: QaidQuestText, autoAdvance: Bool,
+                 progressPosition: QaidQuestProgressPosition? = nil) {
         self.quest = quest
         self.text = text
         self.autoAdvance = autoAdvance
+        self.progressPosition = progressPosition ?? quest.progressPosition
         currentId = ""
         currentId = visibleQuestions[0].id
     }
@@ -118,9 +122,7 @@ package struct QuestSession: Equatable {
 
     package mutating func setText(_ questionId: String, _ value: String) -> [SessionEffect] {
         guard let question = editable(questionId), case .text(let options) = question.kind else { return [] }
-        var value = value
-        if let max = options.maxLength, value.count > max { value = String(value.prefix(max)) }
-        return set(question, .string(value))
+        return set(question, .string(JSText.clip(value, maxLength: options.maxLength)))
     }
 
     /// `nil` is an empty or unreadable field.

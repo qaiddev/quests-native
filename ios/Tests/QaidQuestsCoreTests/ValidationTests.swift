@@ -17,6 +17,34 @@ final class ValidationTests: XCTestCase {
         XCTAssertNil(message(Fixtures.text("a", required: true), .string("x")))
     }
 
+    func testLengthsAndBlanksAreJavaScripts() {
+        // minLength counts UTF-16 units, as the web embed and Android do: one emoji is 2.
+        XCTAssertNil(message(Fixtures.text("a", required: true, minLength: 2), .string("😀")))
+        XCTAssertNotNil(message(Fixtures.text("a", required: true, minLength: 3), .string("😀")))
+        XCTAssertNil(message(Fixtures.text("a", required: true, minLength: 2), .string("é!")))
+        // Every character JavaScript's trim() strips is blank; nothing else is.
+        let js = "\t\n\u{0B}\u{0C}\r \u{A0}\u{1680}\u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}"
+            + "\u{2008}\u{2009}\u{200A}\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}\u{FEFF}"
+        for scalar in js.unicodeScalars {
+            XCTAssertTrue(JSText.isBlank(String(scalar)), "U+\(String(scalar.value, radix: 16))")
+        }
+        XCTAssertFalse(QuestVisibility.isAnswered(.string(js)))
+        XCTAssertEqual(message(Fixtures.text("a", required: true), .string("\u{A0}\u{FEFF}")), "This field is required.")
+        // Foundation says yes to U+0085; JavaScript (and so the web) says no.
+        XCTAssertFalse(JSText.isBlank("\u{85}"))
+        XCTAssertTrue(QuestVisibility.isAnswered(.string("\u{85}")))
+        XCTAssertFalse(JSText.isBlank("\u{200B}"))
+        XCTAssertEqual(JSText.trim("\u{FEFF} a b\u{A0}"), "a b")
+    }
+
+    func testClipCountsUTF16AndKeepsEmojiWhole() {
+        XCTAssertEqual(JSText.clip("abcdef", maxLength: 3), "abc")
+        XCTAssertEqual(JSText.clip("ab", maxLength: 3), "ab")
+        XCTAssertEqual(JSText.clip("abcdef", maxLength: nil), "abcdef")
+        XCTAssertEqual(JSText.clip("a😀b", maxLength: 3), "a😀")
+        XCTAssertEqual(JSText.clip("a😀b", maxLength: 2), "a")
+    }
+
     func testMinLengthMessageWinsEvenWhenEmpty() {
         let question = Fixtures.text("a", required: true, minLength: 3)
         XCTAssertEqual(message(question, .string("")), "Please enter at least 3 characters.")
@@ -74,6 +102,9 @@ final class RangeMathTests: XCTestCase {
         XCTAssertEqual(RangeMath.snap(-4, options: options), 0)
         XCTAssertEqual(RangeMath.snap(0.30000000000000004, options: RangeOptions(min: 0, max: 1, step: 0.1)), 0.3)
         XCTAssertEqual(RangeMath.snap(7, options: RangeOptions(min: 1, max: 5)), 5)
+        // 0.3 / 0.1 is 2.9999999999999996: without a tolerance the top step would be 0.2.
+        XCTAssertEqual(RangeMath.snap(0.3, options: RangeOptions(min: 0, max: 0.3, step: 0.1)), 0.3)
+        XCTAssertEqual(RangeMath.snap(9, options: RangeOptions(min: 0, max: 0.3, step: 0.1)), 0.3)
     }
 
     func testInitialValue() {
@@ -171,8 +202,22 @@ final class TextTests: XCTestCase {
         XCTAssertFalse(text.notConfigured.isEmpty)
         XCTAssertFalse(text.datePlaceholder.isEmpty)
         XCTAssertFalse(text.clearDate.isEmpty)
-        XCTAssertFalse(text.retry.isEmpty)
         XCTAssertFalse(text.savedOffline.isEmpty)
+        // The same keys and defaults as Android's QaidQuestText.
+        XCTAssertEqual(text.retry, "Retry")
+        XCTAssertEqual(text.loadErrorOffline, "Check your connection and try again.")
+        XCTAssertEqual(text.datePlaceholder, "Pick a date")
+        XCTAssertEqual(text.clearDate, "Clear date")
+        XCTAssertEqual([text.dateConfirm, text.dateCancel], ["OK", "Cancel"])
+        XCTAssertEqual(text.savedOffline, "Your answers are saved on this device and will be sent when you're back online.")
+    }
+
+    func testTagsMatchAndroids() {
+        XCTAssertEqual(QaidQuestTags.card, "qaid-quest")
+        XCTAssertEqual(QaidQuestTags.option("blue"), "qaid-quest-option-blue")
+        XCTAssertEqual(Set([QaidQuestTags.primary, QaidQuestTags.back, QaidQuestTags.close, QaidQuestTags.error,
+                            QaidQuestTags.progress, QaidQuestTags.text, QaidQuestTags.currency, QaidQuestTags.range,
+                            QaidQuestTags.date, QaidQuestTags.retry]).count, 10)
     }
 
     func testTemplates() {

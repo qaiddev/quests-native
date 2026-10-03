@@ -7,9 +7,10 @@ final class ControllerTests: XCTestCase {
     var announcements: [String] = []
     var alerts: [String] = []
     var completed: [[String: QuestAnswer]] = []
-    var reports: [QaidQuestsErrorReport] = []
+    var reports: [QaidQuestsErrorEvent] = []
     var logs: [String] = []
     var changes = 0
+    var savedOffline = 0
 
     override func setUp() async throws {
         root = temporaryDirectory()
@@ -19,6 +20,7 @@ final class ControllerTests: XCTestCase {
         reports = []
         logs = []
         changes = 0
+        savedOffline = 0
     }
 
     override func tearDown() async throws {
@@ -31,7 +33,7 @@ final class ControllerTests: XCTestCase {
         let environment = QuestEnvironment(config: config, device: Fixtures.device, visitorId: "visitor_1",
                                            appMetadata: app, transport: transport, store: OfflineQuestStore(root: root),
                                            retry: QuestRetryPolicy(delays: []), debounce: 0, autoAdvanceDelay: 0,
-                                           sleep: noSleep)
+                                           sleep: noSleep, onSavedOffline: { self.savedOffline += 1 })
         let controller = QuestController(questId: "quest_1", screen: screen, metadata: metadata, environment: environment)
         controller.onAnnounce = { words, assertive in
             if assertive { self.alerts.append(words) } else { self.announcements.append(words) }
@@ -123,7 +125,7 @@ final class ControllerTests: XCTestCase {
         await controller.start()
         XCTAssertEqual(controller.screen, .loadFailed("Failed to load questionnaire (404)"))
         XCTAssertEqual(alerts, ["Couldn't load form. Failed to load questionnaire (404)"])
-        XCTAssertEqual(reports, [QaidQuestsErrorReport(operation: .loadQuest, questId: "quest_1",
+        XCTAssertEqual(reports, [QaidQuestsErrorEvent(questId: "quest_1", operation: .loadQuest,
                                                        error: .rejected(status: 404, message: ""))])
         XCTAssertEqual(transport.requests.count, 1)
         await controller.start()
@@ -144,7 +146,7 @@ final class ControllerTests: XCTestCase {
         XCTAssertEqual(QuestController.error(for: .network), .network("The quest couldn't be loaded"))
     }
 
-    func testThemeIsAppliedAndAFailedOneIsLogged() async {
+    func testThemeIsAppliedAndAFailedOneIsReported() async {
         let themed = ScriptedTransport(ScriptedTransport.server(theme: ##"{"tokens":{"--qaid-q-accent":"#ff0000"}}"##))
         let controller = controller(themed, config: Fixtures.config(themeId: "th_1"))
         await controller.start()
@@ -157,8 +159,19 @@ final class ControllerTests: XCTestCase {
         let fallback = self.controller(missing, config: Fixtures.config(themeId: "th_2", theme: QaidQuestTheme(mode: .dark)))
         await fallback.start()
         XCTAssertEqual(fallback.style.mode, .dark)
-        XCTAssertTrue(logs.contains { $0.contains("th_2") })
-        XCTAssertEqual(reports.map(\.operation), [.loadTheme])
+        XCTAssertTrue(logs.contains { $0.contains("loadTheme") })
+        XCTAssertEqual(reports, [QaidQuestsErrorEvent(questId: "quest_1", operation: .loadTheme,
+                                                      error: .rejected(status: 404, message: "Theme not found"))])
+
+        // A pinned version, custom CSS (logged and ignored) and the app's own font size.
+        var pinned = Fixtures.config(themeId: "th_3", theme: QaidQuestTheme(fontSize: 20))
+        pinned.themeVersion = 4
+        let cssy = ScriptedTransport(ScriptedTransport.server(theme: #"{"css":".x{}","unstyled":true}"#))
+        let versioned = self.controller(cssy, config: pinned)
+        await versioned.start()
+        XCTAssertTrue(cssy.calls.contains("GET /api/quest-themes/th_3/v/4/public"))
+        XCTAssertTrue(logs.contains { $0.contains("no native equivalent") })
+        XCTAssertEqual(versioned.style.metrics.fontSize, 20)
 
         let none = self.controller(ScriptedTransport(), config: Fixtures.config(themeId: "  "))
         await none.start()
@@ -180,6 +193,7 @@ final class ControllerTests: XCTestCase {
         XCTAssertEqual(controller.session?.phase, .done(savedOffline: true))
         XCTAssertEqual(completed, [["a": .string("hi")]])
         XCTAssertEqual(OfflineQuestStore(root: root).entries().count, 1)
+        XCTAssertEqual(savedOffline, 1)
     }
 
     func testRefusedSubmitThenTryAgain() async {
@@ -221,5 +235,23 @@ final class ControllerTests: XCTestCase {
         controller.close()
         await controller.waitUntilIdle()
         XCTAssertFalse(controller.saving)
+    }
+
+    func testConfigurationOverridesTheQuestsProgressPositionAndSetsTheDebounce() async {
+        var config = Fixtures.config()
+        config.progressPosition = .bottom
+        let controller = controller(ScriptedTransport(), config: config)
+        await controller.start()
+        XCTAssertEqual(controller.session?.progressPosition, .bottom)
+        XCTAssertEqual(controller.session?.quest.progressPosition, .top)
+
+        config.saveDebounceMs = 250
+        let environment = QuestEnvironment(config: config, device: Fixtures.device, visitorId: "v",
+                                           transport: ScriptedTransport(), store: nil)
+        XCTAssertEqual(environment.debounce, 0.25)
+        XCTAssertEqual(environment.submitTimeout, 20)
+        config.saveDebounceMs = -5
+        XCTAssertEqual(QuestEnvironment(config: config, device: Fixtures.device, visitorId: "v",
+                                        transport: ScriptedTransport(), store: nil).debounce, 0)
     }
 }

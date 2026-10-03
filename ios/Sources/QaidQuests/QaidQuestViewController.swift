@@ -18,11 +18,12 @@ public final class QaidQuestViewController: UIViewController, UIAdaptivePresenta
     private var closed = false
 
     public init(questId: String, screen: String? = nil, metadata: [String: String] = [:],
-                onComplete: (([String: QuestAnswer]) -> Void)? = nil) {
+                onComplete: (([String: QuestAnswer]) -> Void)? = nil, onClose: (() -> Void)? = nil) {
         self.questId = questId
         self.screen = screen
         self.metadata = metadata
         self.onComplete = onComplete
+        self.onClose = onClose
         super.init(nibName: nil, bundle: nil)
     }
 

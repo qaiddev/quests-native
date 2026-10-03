@@ -24,7 +24,7 @@ public enum QaidQuests {
 
     /// Every failure talking to qaid (a refused answer, an unreachable submit…), on the
     /// main thread. The person is never blocked by one; this is for the app's own logs.
-    public static var onError: ((QaidQuestsErrorReport) -> Void)?
+    public static var onError: ((QaidQuestsErrorEvent) -> Void)?
 
     /// Also sends any responses saved while offline, and keeps watching for the network.
     public static func configure(_ configuration: QaidQuestsConfiguration) {
@@ -41,16 +41,19 @@ public enum QaidQuests {
     ///   - screen: where the person is ("Settings"), appended to the page URL and sent
     ///     as `metadata.screen`.
     ///   - metadata: extra top-level response metadata, e.g. `["feedbackId": id]`.
+    ///   - onClose: called once when the sheet goes away (×, Close, or a swipe down).
+    ///     Closing never submits.
     public static func present(questId: String, from presenter: UIViewController? = nil, screen: String? = nil,
                                metadata: [String: String] = [:],
-                               onComplete: (([String: QuestAnswer]) -> Void)? = nil) {
+                               onComplete: (([String: QuestAnswer]) -> Void)? = nil,
+                               onClose: (() -> Void)? = nil) {
         guard configuration != nil else {
             assertionFailure("QaidQuests.configure(_:) must be called before present(questId:)")
             return
         }
         guard let presenter = presenter ?? UIApplication.shared.qaidTopViewController else { return }
         let controller = QaidQuestViewController(questId: questId, screen: screen, metadata: metadata,
-                                                 onComplete: onComplete)
+                                                 onComplete: onComplete, onClose: onClose)
         controller.isSheet = true
         controller.modalPresentationStyle = .pageSheet
         if let sheet = controller.sheetPresentationController {
@@ -91,7 +94,9 @@ public enum QaidQuests {
         QuestEnvironment(config: config, device: .current(appName: config.appName),
                          visitorId: nonBlank(config.visitorId) ?? VisitorId.current,
                          appMetadata: QuestMetadataStore.shared.snapshot(), transport: URLSessionQuestTransport(),
-                         store: QuestQueueRuntime.shared.store)
+                         store: QuestQueueRuntime.shared.store,
+                         // Sent at once if the network is back already; the queue keeps it otherwise.
+                         onSavedOffline: { QuestQueueRuntime.shared.flush() })
     }
 }
 

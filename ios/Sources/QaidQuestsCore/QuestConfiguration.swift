@@ -23,33 +23,45 @@ public struct QaidQuestsConfiguration: Equatable, Sendable {
     public var theme: QaidQuestTheme?
     /// A saved quest theme, fetched from `/api/quest-themes/<id>/public` on the base's origin.
     public var themeId: String?
+    /// Pins `themeId` to one published version instead of whichever is live.
+    public var themeVersion: Int?
     /// Every word the SDK draws itself.
     public var text: QaidQuestText
     /// Picking an option of a single-choice question moves on by itself, 180 ms later.
     public var autoAdvance: Bool
+    /// Overrides the quest's own progress position.
+    public var progressPosition: QaidQuestProgressPosition?
     /// Overrides the visitor id kept on the device (shared with the QaidFeedback SDK).
     public var visitorId: String?
+    /// How long typing settles before an answer is saved, in milliseconds.
+    public var saveDebounceMs: Int
 
     public init(
         apiKey: String,
+        appName: String = "",
         base: URL = QaidQuestsConfiguration.defaultBase,
         pageUrl: URL? = nil,
-        appName: String = "",
         theme: QaidQuestTheme? = nil,
         themeId: String? = nil,
+        themeVersion: Int? = nil,
         text: QaidQuestText = QaidQuestText(),
         autoAdvance: Bool = false,
-        visitorId: String? = nil
+        progressPosition: QaidQuestProgressPosition? = nil,
+        visitorId: String? = nil,
+        saveDebounceMs: Int = 500
     ) {
         self.apiKey = apiKey
+        self.appName = appName
         self.base = base
         self.pageUrl = pageUrl
-        self.appName = appName
         self.theme = theme
         self.themeId = themeId
+        self.themeVersion = themeVersion
         self.text = text
         self.autoAdvance = autoAdvance
+        self.progressPosition = progressPosition
         self.visitorId = visitorId
+        self.saveDebounceMs = saveDebounceMs
     }
 
     public static let defaultBase = URL(string: "https://qaid.dev/api/quests")!
@@ -71,7 +83,8 @@ public struct QaidQuestTheme: Equatable, Sendable {
         case dark
     }
 
-    public enum Preset: String, Equatable, Sendable {
+    /// qaid's theme editor presets.
+    public enum Preset: String, Equatable, Sendable, CaseIterable {
         case `default`, minimal, pill, dense
     }
 
@@ -83,17 +96,21 @@ public struct QaidQuestTheme: Equatable, Sendable {
     public var focus: String?
     /// The first installed family wins; `system-ui` (or nothing) is the system font.
     public var fontFamily: String?
+    /// The base text size in points; every other size scales from it (and with Dynamic
+    /// Type). qaid's default is 16.
+    public var fontSize: Double?
     /// Points, for the card, buttons, options and fields alike.
     public var cornerRadius: Double?
     public var mode: Mode?
     public var preset: Preset?
 
     public init(accent: String? = nil, error: String? = nil, focus: String? = nil, fontFamily: String? = nil,
-                cornerRadius: Double? = nil, mode: Mode? = nil, preset: Preset? = nil) {
+                fontSize: Double? = nil, cornerRadius: Double? = nil, mode: Mode? = nil, preset: Preset? = nil) {
         self.accent = accent
         self.error = error
         self.focus = focus
         self.fontFamily = fontFamily
+        self.fontSize = fontSize
         self.cornerRadius = cornerRadius
         self.mode = mode
         self.preset = preset

@@ -14,35 +14,35 @@ sealed interface QuestAnswer {
     data class Choices(val values: List<String>) : QuestAnswer
     data object None : QuestAnswer
 
-    /**
-     * The web embed's "answered", which visibleIf reads: not null, not whitespace-only text,
-     * not an empty list. Zero is answered.
-     */
-    val isAnswered: Boolean
-        get() = when (this) {
-            is Text -> value.isNotBlank()
-            is Number -> true
-            is Choices -> values.isNotEmpty()
-            else -> false
-        }
-
-    /** The value as it goes in a JSON body. */
-    fun toJson(): Any = when (this) {
-        is Text -> value
-        is Number -> value
-        is Choices -> JSONArray(values)
-        else -> JSONObject.NULL
-    }
-
     companion object {
         /** Back from a JSON body (the offline queue). Anything else reads as [None]. */
-        fun fromJson(value: Any?): QuestAnswer = when (value) {
+        internal fun fromJson(value: Any?): QuestAnswer = when (value) {
             is String -> Text(value)
             is kotlin.Number -> Number(value.toDouble())
             is JSONArray -> Choices((0 until value.length()).map { value.optString(it) })
             else -> None
         }
     }
+}
+
+/**
+ * The web embed's "answered", which visibleIf reads: not null, not whitespace-only text (by
+ * JavaScript's whitespace), not an empty list. Zero is answered.
+ */
+internal val QuestAnswer.isAnswered: Boolean
+    get() = when (this) {
+        is QuestAnswer.Text -> !JsText.isBlank(value)
+        is QuestAnswer.Number -> true
+        is QuestAnswer.Choices -> values.isNotEmpty()
+        else -> false
+    }
+
+/** The value as it goes in a JSON body. */
+internal fun QuestAnswer.toJson(): Any = when (this) {
+    is QuestAnswer.Text -> value
+    is QuestAnswer.Number -> value
+    is QuestAnswer.Choices -> JSONArray(values)
+    else -> JSONObject.NULL
 }
 
 /** `{ questionId: value }` as the submit body and `onComplete` carry it. */

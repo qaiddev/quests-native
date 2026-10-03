@@ -62,33 +62,41 @@ struct QuestTextInput: View {
     let question: QuestQuestion
     let options: TextOptions
     let look: QuestLook
+    /// The field's own text: the clamp has to change what it shows, which a binding that
+    /// only clamps what it saves does not do.
+    @State private var text: String
     @FocusState private var focused: Bool
 
+    init(controller: QuestController, session: QuestSession, question: QuestQuestion, options: TextOptions,
+         look: QuestLook) {
+        self.controller = controller
+        self.session = session
+        self.question = question
+        self.options = options
+        self.look = look
+        var typed = ""
+        if case .string(let saved)? = session.answer(question.id) { typed = saved }
+        _text = State(initialValue: typed)
+    }
+
     var body: some View {
-        let value = Binding<String>(
-            get: {
-                if case .string(let typed)? = session.answer(question.id) { return typed }
-                return ""
-            },
-            set: { controller.setText(question.id, $0) }
-        )
         Group {
             if options.multiline {
                 ZStack(alignment: .topLeading) {
-                    if value.wrappedValue.isEmpty, let placeholder = options.placeholder {
+                    if text.isEmpty, let placeholder = options.placeholder {
                         Text(placeholder)
                             .foregroundColor(look.color(look.palette.inputPlaceholder))
                             .padding(.top, 8)
                             .padding(.leading, 5)
                             .accessibilityHidden(true)
                     }
-                    TextEditor(text: value)
+                    TextEditor(text: $text)
                         .focused($focused)
                         .frame(minHeight: 112 * look.scale)
                 }
                 .modifier(QuestField(look: look, invalid: session.error != nil, focused: focused))
             } else {
-                TextField("", text: value, prompt: options.placeholder.map {
+                TextField("", text: $text, prompt: options.placeholder.map {
                     Text($0).foregroundColor(look.color(look.palette.inputPlaceholder))
                 })
                 .focused($focused)
@@ -102,6 +110,16 @@ struct QuestTextInput: View {
             }
         }
         .accessibilityLabel(question.label)
+        .accessibilityIdentifier(QaidQuestTags.text)
+        .onChange(of: text) { typed in
+            // HTML maxlength, in UTF-16 units: the field itself stops at the cap.
+            let clipped = JSText.clip(typed, maxLength: options.maxLength)
+            guard clipped == typed else {
+                text = clipped
+                return
+            }
+            controller.setText(question.id, typed)
+        }
         .onChange(of: controller.controlFocus) { _ in focused = true }
     }
 
@@ -146,15 +164,18 @@ struct QuestCurrencyInput: View {
             Text(CurrencyFormat.symbol(code: options.currency, locale: locale))
                 .foregroundColor(look.color(look.palette.muted))
                 .accessibilityHidden(true)
+            // The field keeps its own element (a combined one can't be edited with
+            // VoiceOver); the currency code is spoken in its label instead of the symbol.
             TextField("", text: value, prompt: options.placeholder.map {
                 Text($0).foregroundColor(look.color(look.palette.inputPlaceholder))
             })
             .keyboardType(.decimalPad)
             .focused($focused)
+            .accessibilityLabel("\(question.label), \(options.currency)")
+            .accessibilityIdentifier(QaidQuestTags.currency)
         }
         .modifier(QuestField(look: look, invalid: session.error != nil, focused: focused))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(question.label), \(options.currency)")
+        .accessibilityElement(children: .contain)
         .onChange(of: controller.controlFocus) { _ in focused = true }
     }
 }
@@ -180,6 +201,7 @@ struct QuestRangeInput: View {
                 .frame(minHeight: 44)
                 .accessibilityLabel(question.label)
                 .accessibilityValue(RangeMath.label(current, unit: options.unit))
+                .accessibilityIdentifier(QaidQuestTags.range)
             HStack {
                 Text(RangeMath.label(options.min, unit: options.unit))
                 Spacer()
@@ -209,6 +231,7 @@ struct QuestDateInput: View {
                 picker(selection, calendar: calendar)
                     .labelsHidden()
                     .accessibilityLabel(question.label)
+                    .accessibilityIdentifier(QaidQuestTags.date)
                     .tint(look.color(look.palette.accent))
                 Spacer()
                 Button(text.clearDate) { controller.setDate(question.id, nil) }
@@ -231,6 +254,7 @@ struct QuestDateInput: View {
             }
             .accessibilityLabel(question.label)
             .accessibilityValue(text.datePlaceholder)
+            .accessibilityIdentifier(QaidQuestTags.date)
         }
     }
 
@@ -331,6 +355,7 @@ struct QuestChoiceInput: View {
         .accessibilityLabel(option.label)
         .accessibilityHint(option.description ?? "")
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityIdentifier(QaidQuestTags.option(option.value))
     }
 
     private func labels(_ option: ChoiceOption, center: Bool) -> some View {

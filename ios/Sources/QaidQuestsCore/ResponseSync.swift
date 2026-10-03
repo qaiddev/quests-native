@@ -8,7 +8,11 @@ import Foundation
 ///   previous one first), and an answer equal to the last one queued is not resent;
 /// - the network and 5xx are retried with backoff; a refused (4xx) answer is
 ///   reported and skipped; a refused create waits for submit, which tries it again;
-/// - if submit still can't reach qaid, everything unsent goes to the offline queue.
+/// - once a call can't get through, nothing more is sent until submit, so a person
+///   offline doesn't start a retry chain on every keystroke;
+/// - at submit, a network failure goes straight to the offline queue, and sending never
+///   keeps the person on "Sending…" longer than `submitTimeout` before it does. Android
+///   has the same rules.
 @MainActor
 package final class ResponseSync {
     package enum SubmitOutcome: Equatable {
@@ -24,10 +28,13 @@ package final class ResponseSync {
     let store: OfflineQuestStore?
     let debounce: TimeInterval
     let sleep: QuestSleep
+    let submitTimeout: TimeInterval
 
-    package var onError: ((QaidQuestsErrorReport) -> Void)?
+    package var onError: ((QaidQuestsErrorEvent) -> Void)?
     /// True while answers are on their way, for the "Saving…" note.
     package var onSavingChange: ((Bool) -> Void)?
+    /// A response went into the offline queue: worth a flush, in case the network is back.
+    package var onSavedOffline: (() -> Void)?
 
     package private(set) var responseId: String?
     private var queue: [OfflineOperation] = []
@@ -42,14 +49,19 @@ package final class ResponseSync {
     private var outcome: SubmitOutcome?
     private var saving = false
 
+    /// The longest a submit keeps the person on "Sending…" before the answers go to the queue.
+    nonisolated package static let defaultSubmitTimeout: TimeInterval = 20
+
     package init(client: QuestClient, questId: String, createBody: QuestJSON, store: OfflineQuestStore?,
-                 debounce: TimeInterval = 0.5, sleep: @escaping QuestSleep = realSleep) {
+                 debounce: TimeInterval = 0.5, sleep: @escaping QuestSleep = realSleep,
+                 submitTimeout: TimeInterval = ResponseSync.defaultSubmitTimeout) {
         self.client = client
         self.questId = questId
         self.createBody = createBody
         self.store = store
         self.debounce = debounce
         self.sleep = sleep
+        self.submitTimeout = submitTimeout
     }
 
     /// Creates the response. Called once the quest is on screen, never before.
@@ -109,8 +121,24 @@ package final class ResponseSync {
         while let task = draining { await task.value }
     }
 
+    /// Waits for the running drain for at most `timeout`, then stops it. False when it had
+    /// to be stopped. A stopped drain never touches the queue again, so what is unsent stays exact.
+    private func finishDraining(within timeout: TimeInterval) async -> Bool {
+        guard let task = draining else { return true }
+        return await withTaskGroup(of: Bool.self) { group -> Bool in
+            group.addTask { await task.value; return true }
+            // A real clock, whatever `sleep` the debounce uses.
+            group.addTask { await realSleep(timeout); return false }
+            let finished = await group.next() ?? true
+            if !finished { task.cancel() }
+            group.cancelAll()
+            return finished
+        }
+    }
+
     private func drain() async {
-        while stallError == nil {
+        // A cancelled drain (submit's time limit) never touches the queue again.
+        while stallError == nil, !Task.isCancelled {
             guard let responseId else {
                 switch await client.create(body: createBody) {
                 case .success(let id):
@@ -141,6 +169,7 @@ package final class ResponseSync {
                     return
                 }
             }
+            guard !Task.isCancelled else { return }
             queue.removeFirst()
         }
     }
@@ -152,13 +181,18 @@ package final class ResponseSync {
         if let outcome { return outcome }
         flush()
         for questionId in hidden { enqueue(questionId, .null) }
-        // Let a running drain finish first, so it can't send this submit as well.
-        await waitUntilIdle()
+        // No drain is ever on a submit here: each submit waits for (or stops) its own.
         queue.removeAll { if case .submit = $0 { return true } else { return false } }
         queue.append(.submit(answers: answers))
-        stallError = nil
-        kick()
-        await waitUntilIdle()
+        // The network already failed: another round of retries would only keep the person
+        // watching "Sending…". Anything else (a 5xx, a refused create) is tried once more.
+        if !stalledOffline {
+            stallError = nil
+            kick()
+            if await !finishDraining(within: submitTimeout) {
+                stallError = .network("Timed out after \(Int(submitTimeout)) s")
+            }
+        }
         guard let error = stallError else { return finish(.sent) }
         guard error.isRetryable, let store else { return .failed(error) }
         let start: OfflineResponse.Start = responseId.map { .created(responseId: $0) } ?? .pending(createBody: createBody)
@@ -171,7 +205,13 @@ package final class ResponseSync {
             return .failed(failure)
         }
         queue.removeAll()
+        onSavedOffline?()
         return finish(.savedOffline)
+    }
+
+    private var stalledOffline: Bool {
+        if case .network? = stallError { return true }
+        return false
     }
 
     private func finish(_ result: SubmitOutcome) -> SubmitOutcome {
@@ -185,7 +225,7 @@ package final class ResponseSync {
         onSavingChange?(value)
     }
 
-    private func report(_ operation: QaidQuestsErrorReport.Operation, _ questionId: String?, _ error: QaidQuestsError) {
-        onError?(QaidQuestsErrorReport(operation: operation, questId: questId, questionId: questionId, error: error))
+    private func report(_ operation: QaidQuestsErrorEvent.Operation, _ questionId: String?, _ error: QaidQuestsError) {
+        onError?(QaidQuestsErrorEvent(questId: questId, operation: operation, questionId: questionId, error: error))
     }
 }

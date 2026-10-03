@@ -26,6 +26,22 @@ final class RequestTests: XCTestCase {
         XCTAssertEqual(QuestRequests.theme(base: base, themeId: "t", apiKey: "", userAgent: "")?.url.absoluteString,
                        "https://qaid.dev/api/quest-themes/t/public")
         XCTAssertNil(QuestRequests.theme(base: URL(string: "relative/path")!, themeId: "t", apiKey: "", userAgent: ""))
+        XCTAssertEqual(QuestRequests.theme(base: base, themeId: "t", version: 3, apiKey: "k", userAgent: "")?.url.absoluteString,
+                       "https://qaid.dev/api/quest-themes/t/v/3/public?key=k")
+    }
+
+    func testRequestsNeverComeFromTheLocalCache() {
+        let request = QuestRequests.definition(base: base, questId: "q", userAgent: "UA")
+        let urlRequest = URLSessionQuestTransport.urlRequest(request, timeout: 12)
+        XCTAssertEqual(urlRequest.cachePolicy, .reloadIgnoringLocalCacheData)
+        XCTAssertEqual(urlRequest.timeoutInterval, 12)
+        XCTAssertEqual(urlRequest.httpMethod, "GET")
+        XCTAssertEqual(urlRequest.value(forHTTPHeaderField: "User-Agent"), "UA")
+        XCTAssertEqual(urlRequest.url, request.url)
+        let create = URLSessionQuestTransport.urlRequest(QuestRequests.create(base: base, body: ["a": 1], userAgent: "UA"),
+                                                         timeout: 30)
+        XCTAssertEqual(create.cachePolicy, .reloadIgnoringLocalCacheData)
+        XCTAssertEqual(create.httpBody, QuestJSON.object(["a": 1]).data)
     }
 
     func testCreatePatchSubmit() {
@@ -88,7 +104,7 @@ final class RequestTests: XCTestCase {
     }
 
     func testErrorReport() {
-        let report = QaidQuestsErrorReport(operation: .saveAnswer, questId: "q", questionId: "a", error: .server(500))
+        let report = QaidQuestsErrorEvent(questId: "q", operation: .saveAnswer, questionId: "a", error: .server(500))
         XCTAssertEqual(report.operation.rawValue, "saveAnswer")
         XCTAssertEqual(report.questionId, "a")
         XCTAssertEqual(report.questId, "q")
@@ -134,15 +150,17 @@ final class ClientTests: XCTestCase {
     func testLoadTheme() async {
         let found = ScriptedTransport(ScriptedTransport.server(theme: #"{"preset":"pill"}"#))
         let document = await client(found).loadTheme(themeId: "t", apiKey: "k")
-        XCTAssertEqual(document?.preset, .pill)
+        XCTAssertEqual(try? document.get().preset, .pill)
         XCTAssertEqual(found.requests.first?.url.query, "key=k")
         let missing = await client(ScriptedTransport()).loadTheme(themeId: "t", apiKey: "k")
-        XCTAssertNil(missing)
+        XCTAssertEqual(missing, .failure(.rejected(status: 404, message: "Theme not found")))
         let offline = await client(ScriptedTransport { _ in throw Offline() }).loadTheme(themeId: "t", apiKey: "k")
-        XCTAssertNil(offline)
+        guard case .failure(.network) = offline else { return XCTFail("\(offline)") }
+        let garbled = await client(ScriptedTransport(ScriptedTransport.server(theme: "[1]"))).loadTheme(themeId: "t", apiKey: "k")
+        XCTAssertEqual(garbled, .failure(.invalidResponse("Invalid theme")))
         let noHost = QuestClient(base: URL(string: "relative")!, userAgent: "", transport: ScriptedTransport())
         let none = await noHost.loadTheme(themeId: "t", apiKey: "")
-        XCTAssertNil(none)
+        XCTAssertEqual(none, .failure(.invalidResponse("No host in relative")))
     }
 
     func testRetriesTheNetworkAndServerWithBackoff() async {

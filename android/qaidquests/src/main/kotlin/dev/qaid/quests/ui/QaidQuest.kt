@@ -1,6 +1,7 @@
 package dev.qaid.quests.ui
 
 import android.app.Activity
+import android.app.Application
 import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
@@ -30,6 +31,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
@@ -40,12 +42,11 @@ import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.LifecycleOwner
 import dev.qaid.quests.QaidQuests
+import dev.qaid.quests.core.QaidQuestText
 import dev.qaid.quests.core.QuestAnswer
 import dev.qaid.quests.core.QuestController
+import dev.qaid.quests.internal.ActivityCallbacks
 import dev.qaid.quests.internal.TAG
 import dev.qaid.quests.internal.findActivity
 import java.util.UUID
@@ -77,6 +78,7 @@ fun QaidQuest(
     val host = remember(key) { QaidQuests.host(key, context, questId, screen, metadata) }
     if (host == null) {
         LaunchedEffect(Unit) { Log.e(TAG, "QaidQuests.configure() must be called before showing a quest") }
+        Box(modifier, contentAlignment = Alignment.Center) { Text(QaidQuestText().notConfigured) }
         return
     }
     SideEffect { host.onComplete = onComplete }
@@ -121,13 +123,62 @@ class QaidQuestView @JvmOverloads constructor(
 /**
  * The presented form: a bottom sheet in its own dialog window over the activity, so it works
  * from any Activity, Compose or not. Closing — Close, back, or a tap outside — never submits.
+ *
+ * A dialog can't outlive its activity, so when a rotation (or any configuration change)
+ * rebuilds the activity, the sheet is taken down and shown again over the new one, with the
+ * same controller: the person stays on the same step with the same answers, and neither
+ * `close()` nor `onClose` runs. Main thread only.
  */
 internal object QuestSheet {
-    fun show(activity: Activity, controller: QuestController, onClose: (() -> Unit)?) {
+    private class Presented(val controller: QuestController, val onClose: (() -> Unit)?)
+
+    private class Shown(val dialog: ComponentDialog, val sheet: Presented) {
+        /** Set when the dialog goes away for good, or to be shown again over a rebuilt activity. */
+        var finished = false
+    }
+
+    /** Dialogs on screen, by activity. */
+    private val showing = HashMap<Activity, MutableList<Shown>>()
+
+    /** Sheets whose activity is being rebuilt, by [key], to show over the new one. */
+    private val waiting = HashMap<String, MutableList<Presented>>()
+    private var watching = false
+
+    fun present(activity: Activity, controller: QuestController, onClose: (() -> Unit)?) {
+        watch(activity.application)
+        show(activity, Presented(controller, onClose))
+        controller.start()
+    }
+
+    /** An activity and the one rebuilt in its place share their task and class. */
+    private fun key(activity: Activity) = "${activity.taskId}/${activity.javaClass.name}"
+
+    private fun watch(app: Application) {
+        if (watching) return
+        watching = true
+        app.registerActivityLifecycleCallbacks(object : ActivityCallbacks() {
+            override fun onActivityStarted(activity: Activity) {
+                waiting.remove(key(activity))?.forEach { show(activity, it) }
+            }
+
+            override fun onActivityDestroyed(activity: Activity) {
+                val rebuilding = activity.isChangingConfigurations
+                showing.remove(activity)?.forEach { shown ->
+                    if (rebuilding) {
+                        shown.finished = true
+                        waiting.getOrPut(key(activity)) { mutableListOf() } += shown.sheet
+                    }
+                    shown.dialog.dismiss()
+                }
+            }
+        })
+    }
+
+    private fun show(activity: Activity, sheet: Presented) {
         val dialog = ComponentDialog(activity, android.R.style.Theme_Translucent_NoTitleBar)
-        var closed = false
+        val shown = Shown(dialog, sheet)
         val view = ComposeView(activity).apply {
-            setContent { Sheet(controller, onDismiss = { dialog.dismiss() }) }
+            setContent { Sheet(sheet.controller, onDismiss = { dialog.dismiss() }) }
         }
         dialog.setContentView(view, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         dialog.window?.let { window ->
@@ -138,18 +189,15 @@ internal object QuestSheet {
             WindowCompat.setDecorFitsSystemWindows(window, false)
         }
         dialog.setOnDismissListener {
-            if (!closed) {
-                closed = true
-                controller.close()
-                onClose?.invoke()
+            showing[activity]?.remove(shown)
+            if (!shown.finished) {
+                shown.finished = true
+                sheet.controller.close()
+                sheet.onClose?.invoke()
             }
         }
-        // The dialog can't outlive its activity (a rotation would leak its window).
-        (activity as? LifecycleOwner)?.lifecycle?.addObserver(
-            LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_DESTROY && dialog.isShowing) dialog.dismiss() },
-        )
+        showing.getOrPut(activity) { mutableListOf() } += shown
         dialog.show()
-        controller.start()
     }
 }
 

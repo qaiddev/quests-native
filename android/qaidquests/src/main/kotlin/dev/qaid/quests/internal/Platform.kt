@@ -140,9 +140,7 @@ internal object PendingQueue {
         if (!QaidQuests.isConfigured || !flushing.compareAndSet(false, true)) return
         scope.launch {
             try {
-                val sent = PendingFlusher(store(context), QaidQuests.transport, onRefused = { op, error ->
-                    QaidQuests.report("saved", op, error)
-                }).flush()
+                val sent = PendingFlusher(store(context), QaidQuests.transport, onRefused = QaidQuests::report).flush()
                 if (sent > 0) Log.i(TAG, "sent $sent saved quest response(s)")
             } catch (e: Exception) {
                 Log.w(TAG, "sending saved quest responses failed; will try again", e)

@@ -17,7 +17,7 @@ import java.io.IOException
 @OptIn(ExperimentalCoroutinesApi::class)
 class QuestControllerTest {
     private val completed = mutableListOf<Map<String, QuestAnswer>>()
-    private val errors = mutableListOf<QaidQuestErrorEvent>()
+    private val errors = mutableListOf<QaidQuestsErrorEvent>()
     private val logs = mutableListOf<String>()
     private val persisted = mutableListOf<PendingResponse>()
     private var canPersist = true
@@ -26,7 +26,7 @@ class QuestControllerTest {
         override fun onComplete(answers: Map<String, QuestAnswer>) {
             completed += answers
         }
-        override fun onError(event: QaidQuestErrorEvent) {
+        override fun onError(event: QaidQuestsErrorEvent) {
             errors += event
         }
         override fun log(message: String) {
@@ -75,7 +75,7 @@ class QuestControllerTest {
         assertEquals(2, s.step!!.total)
         assertTrue(s.showProgress)
         assertEquals(0.5f, s.progressFraction)
-        assertEquals(ProgressPosition.TOP, s.progressPosition)
+        assertEquals(QaidQuestProgressPosition.TOP, s.progressPosition)
 
         val create = JSONObject(server.requests.first { it.method == "POST" }.body!!)
         assertEquals("key", create.getString("apiKey"))
@@ -125,7 +125,8 @@ class QuestControllerTest {
         advanceUntilIdle()
         assertEquals(QuestPhase.LOAD_FAILED, c.state.value.phase)
         assertEquals("Failed to load questionnaire (404)", c.state.value.loadError)
-        assertEquals(QuestOperation.LOAD_DEFINITION, errors.single().operation)
+        assertEquals(QaidQuestsErrorEvent.Operation.LOAD_QUEST, errors.single().operation)
+        assertEquals(QaidQuestsError.Rejected(404, "Quest not found"), errors.single().error)
 
         response = HttpResponse(200, """{"questions":[]}""")
         c.retryLoad()
@@ -151,7 +152,7 @@ class QuestControllerTest {
         assertEquals(QuestPhase.ANSWERING, c.state.value.phase)
     }
 
-    @Test fun themeLoadsInParallelAndFailuresAreOnlyLogged() = runTest {
+    @Test fun themeLoadsInParallelAndFailuresAreReported() = runTest {
         val themed = config.copy(themeId = "th1", theme = QaidQuestTheme(fontSize = 18f))
         val server = FakeTransport()
         val c = controller(server, themed)
@@ -159,7 +160,7 @@ class QuestControllerTest {
         advanceUntilIdle()
         assertEquals("GET", server.requests[1].method)
         assertTrue(server.requests[1].url.endsWith("/api/quest-themes/th1/public?key=key"))
-        assertEquals(QaidQuestThemeMode.DARK, c.state.value.style.mode)
+        assertEquals(QaidQuestTheme.Mode.DARK, c.state.value.style.mode)
         assertEquals(0xFFFF0000.toInt(), c.state.value.style.light.accent)
         assertEquals(18f, c.state.value.style.metrics.fontSize)
 
@@ -168,8 +169,15 @@ class QuestControllerTest {
         d.start()
         advanceUntilIdle()
         assertEquals(QuestPhase.ANSWERING, d.state.value.phase)
-        assertEquals(QaidQuestThemeMode.AUTO, d.state.value.style.mode)
-        assertTrue(logs.any { it.contains("couldn't be loaded") })
+        assertEquals(QaidQuestTheme.Mode.AUTO, d.state.value.style.mode)
+        assertEquals(
+            QaidQuestsErrorEvent("quest1", QaidQuestsErrorEvent.Operation.LOAD_THEME, error = QaidQuestsError.Rejected(404, "")),
+            errors.single(),
+        )
+        val down = FakeTransport { r -> if (r.url.contains("quest-themes")) throw IOException("down") else FakeTransport.defaultResponse(r) }
+        controller(down, themed).start()
+        advanceUntilIdle()
+        assertTrue(errors.last().error is QaidQuestsError.Network)
 
         val cssy = FakeTransport { r -> if (r.url.contains("quest-themes")) HttpResponse(200, """{"css":".a{}"}""") else FakeTransport.defaultResponse(r) }
         controller(cssy, themed).start()
@@ -185,7 +193,7 @@ class QuestControllerTest {
         logs.clear()
         controller(bad, themed).start()
         advanceUntilIdle()
-        assertTrue(logs.any { it.contains("couldn't be loaded") })
+        assertEquals(QaidQuestsError.InvalidResponse("Invalid theme"), errors.last().error)
     }
 
     @Test fun offlineSubmitSavesAndThanks() = runTest {
@@ -214,8 +222,20 @@ class QuestControllerTest {
         c.next()
         advanceUntilIdle()
         assertEquals(QuestPhase.SUBMIT_FAILED, c.state.value.phase)
-        assertTrue(errors.last().error is QaidQuestError.Storage)
+        assertEquals(QaidQuestsErrorEvent.Operation.OFFLINE_QUEUE, errors.last().operation)
+        assertTrue(errors.last().error is QaidQuestsError.Storage)
         assertTrue(completed.isEmpty())
+
+        // Try again once the disk can take it: the same answers are saved, not reported as sent.
+        canPersist = true
+        c.retrySubmit()
+        advanceUntilIdle()
+        assertEquals(QuestPhase.DONE, c.state.value.phase)
+        assertTrue(c.state.value.savedOffline)
+        assertEquals(2, persisted.size)
+        assertEquals(persisted[0].patches, persisted[1].patches)
+        assertTrue(persisted[1].patches.contains(PendingPatch("role", QuestAnswer.Text("pm"))))
+        assertEquals(1, completed.size)
     }
 
     @Test fun refusedSubmitShowsTheErrorScreenAndRetries() = runTest {
@@ -239,10 +259,10 @@ class QuestControllerTest {
     }
 
     @Test fun autoAdvanceMovesOnAfterASingleChoicePick() = runTest {
-        val c = controller(FakeTransport(), config.copy(autoAdvance = true, progressPosition = ProgressPosition.BOTTOM))
+        val c = controller(FakeTransport(), config.copy(autoAdvance = true, progressPosition = QaidQuestProgressPosition.BOTTOM))
         c.start()
         advanceUntilIdle()
-        assertEquals(ProgressPosition.BOTTOM, c.state.value.progressPosition)
+        assertEquals(QaidQuestProgressPosition.BOTTOM, c.state.value.progressPosition)
         c.answer("role", QuestAnswer.Text("dev"))
         c.answer("role", QuestAnswer.Text("pm"))
         advanceTimeBy(100)

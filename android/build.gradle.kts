@@ -88,7 +88,7 @@ project(":qaidquests") {
 //
 // The gate is one point under the measured numbers, never under 95; raise it with them.
 // -PcoverageLineGate / -PcoverageBranchGate override it, to check the gate fails.
-val coreLineGate = providers.gradleProperty("coverageLineGate").map(String::toInt).getOrElse(98)
+val coreLineGate = providers.gradleProperty("coverageLineGate").map(String::toInt).getOrElse(99)
 val coreBranchGate = providers.gradleProperty("coverageBranchGate").map(String::toInt).getOrElse(98)
 
 project(":qaidquests") {

@@ -156,6 +156,11 @@ package struct QuestThemeDocument: Equatable, Sendable {
         self.css = css
     }
 
+    /// Free CSS or `unstyled`: neither has a native meaning, so both are ignored (and logged).
+    package var ignoresCSS: Bool {
+        unstyled == true || !(css ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// nil for a body that isn't a JSON object. Tokens that aren't `--qaid-` strings are dropped.
     package static func decode(_ data: Data) -> QuestThemeDocument? {
         guard let json = try? QuestJSON.parse(data), let dict = json.objectValue else { return nil }
@@ -282,6 +287,7 @@ package enum QuestStyleResolver {
         if let error = host.error { tokens["--qaid-q-error"] = error }
         if let focus = host.focus { tokens["--qaid-q-focus"] = focus }
         if let family = host.fontFamily { tokens["--qaid-font-family"] = family }
+        if let size = host.fontSize { tokens["--qaid-font-size"] = "\(size)px" }
         if let radius = host.cornerRadius {
             for key in ["--qaid-q-card-radius", "--qaid-q-btn-radius", "--qaid-q-option-radius", "--qaid-q-input-radius"] {
                 tokens[key] = "\(QuestJSON.number(max(radius, 0)))px"

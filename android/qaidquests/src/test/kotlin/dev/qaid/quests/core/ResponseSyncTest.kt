@@ -1,7 +1,9 @@
 package dev.qaid.quests.core
 
+import dev.qaid.quests.core.QaidQuestsErrorEvent.Operation as Op
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -20,24 +22,32 @@ import java.io.IOException
 @OptIn(ExperimentalCoroutinesApi::class)
 class ResponseSyncTest {
     private val endpoints = QuestEndpoints("https://qaid.dev/api/quests")
-    private val errors = mutableListOf<Pair<QuestOperation, QaidQuestError>>()
+    private val errors = mutableListOf<QaidQuestsErrorEvent>()
+    private val persisted = mutableListOf<PendingResponse>()
+    private var canPersist = true
     private val busy = MutableStateFlow(false)
 
-    private fun TestScope.sync(server: FakeTransport, debounce: Long = 500, retry: RetryPolicy = RetryPolicy()) =
-        ResponseSync(server, endpoints, """{"questId":"q"}""", "ua", this, retry, debounce, { 42L }, busy) { op, e -> errors += op to e }
+    private fun TestScope.sync(
+        server: QuestTransport,
+        debounce: Long = 500,
+        retry: RetryPolicy = RetryPolicy(),
+        createBody: String = """{"questId":"q"}""",
+    ) = ResponseSync(
+        server, endpoints, "quest1", createBody, "ua", this,
+        persist = { persisted += it; canPersist },
+        retry = retry, debounceMs = debounce, now = { 42L }, busy = busy, onError = { errors += it },
+    )
 
     private fun values(server: FakeTransport) = server.patches().map { JSONObject(it).let { o -> "${o.getString("questionId")}=${o.get("value")}" } }
 
     @Test fun answersBeforeCreateWaitAndGoInOrder() = runTest {
         val created = CompletableDeferred<Unit>()
         val server = FakeTransport()
-        val gated = object : QuestTransport {
-            override suspend fun send(request: HttpRequest): HttpResponse {
-                if (request.method == "POST") created.await()
-                return server.send(request)
-            }
+        val gated = QuestTransport { request ->
+            if (request.method == "POST") created.await()
+            server.send(request)
         }
-        val sync = ResponseSync(gated, endpoints, "{}", "ua", this, busy = busy)
+        val sync = sync(gated, createBody = "{}")
         sync.start()
         sync.answer("a", QuestAnswer.Text("1"), immediate = true)
         sync.answer("b", QuestAnswer.Text("2"), immediate = true)
@@ -95,7 +105,7 @@ class ResponseSyncTest {
         sync.answer("good", QuestAnswer.Text("y"), true)
         advanceUntilIdle()
         assertEquals(listOf("bad=x", "good=y"), values(server))
-        assertEquals(listOf(QuestOperation.SAVE_ANSWER to QaidQuestError.Http(400, "Unknown questionId")), errors)
+        assertEquals(listOf(QaidQuestsErrorEvent("quest1", Op.SAVE_ANSWER, "bad", QaidQuestsError.Rejected(400, "Unknown questionId"))), errors)
     }
 
     @Test fun submitClearsHiddenAnswersThenSubmits() = runTest {
@@ -114,6 +124,7 @@ class ResponseSyncTest {
         assertEquals(SubmitOutcome.Sent, sync.submit(emptyMap(), emptyList()))
         advanceUntilIdle()
         assertEquals(2, server.patches().size)
+        assertTrue(persisted.isEmpty())
     }
 
     @Test fun networkFailuresRetryWithBackoff() = runTest {
@@ -129,26 +140,42 @@ class ResponseSyncTest {
         assertTrue(errors.isEmpty())
     }
 
-    @Test fun offlineHandsEverythingToTheQueue() = runTest {
+    @Test fun offlineGoesStraightToTheQueueAtSubmit() = runTest {
         val server = FakeTransport(FakeTransport.offline)
         val sync = sync(server, retry = RetryPolicy(listOf(10)))
         sync.start()
         sync.answer("a", QuestAnswer.Text("x"), true)
         advanceUntilIdle()
-        val outcome = sync.submit(mapOf("a" to QuestAnswer.Text("x")), listOf("h")) as SubmitOutcome.Offline
-        val p = outcome.pending
+        // The create gave up after its retries; answers wait in memory, with no retry storm per answer.
+        assertEquals(2, server.requests.size)
+        sync.answer("b", QuestAnswer.Text("y"), true)
+        advanceUntilIdle()
+        assertEquals(2, server.requests.size)
+        val started = currentTime
+        val outcome = sync.submit(mapOf("a" to QuestAnswer.Text("x")), listOf("h"))
+        // The network already failed: no second round of retries before the queue.
+        assertEquals(SubmitOutcome.SavedOffline, outcome)
+        assertEquals(2, server.requests.size)
+        assertEquals(started, currentTime)
+        val p = persisted.single()
         assertNull(p.responseId)
+        assertEquals("quest1", p.questId)
         assertEquals("""{"questId":"q"}""", p.createBody)
-        assertEquals(listOf(PendingPatch("a", QuestAnswer.Text("x")), PendingPatch("h", QuestAnswer.None)), p.patches)
+        assertEquals(
+            listOf(PendingPatch("a", QuestAnswer.Text("x")), PendingPatch("b", QuestAnswer.Text("y")), PendingPatch("h", QuestAnswer.None)),
+            p.patches,
+        )
         assertEquals("""{"answers":{"a":"x"}}""", p.submitBody)
         assertEquals(42L, p.createdAtMs)
         assertEquals("ua", p.userAgent)
         assertEquals("https://qaid.dev/api/quests", p.base)
         assertTrue(p.id.startsWith("42-"))
-        val before = server.requests.size
-        sync.answer("b", QuestAnswer.Text("y"), true)
+        // Saved: nothing more goes out, and a second submit is the same answer.
+        sync.answer("c", QuestAnswer.Text("z"), true)
         advanceUntilIdle()
-        assertEquals(before, server.requests.size)
+        assertEquals(SubmitOutcome.SavedOffline, sync.submit(emptyMap(), emptyList()))
+        assertEquals(2, server.requests.size)
+        assertEquals(1, persisted.size)
     }
 
     @Test fun offlineAfterCreateKeepsTheResponseId() = runTest {
@@ -160,7 +187,8 @@ class ResponseSyncTest {
         online = false
         sync.answer("a", QuestAnswer.Text("x"), true)
         advanceUntilIdle()
-        val p = (sync.submit(mapOf("a" to QuestAnswer.Text("x")), emptyList()) as SubmitOutcome.Offline).pending
+        assertEquals(SubmitOutcome.SavedOffline, sync.submit(mapOf("a" to QuestAnswer.Text("x")), emptyList()))
+        val p = persisted.single()
         assertEquals("r1", p.responseId)
         assertEquals(listOf(PendingPatch("a", QuestAnswer.Text("x"))), p.patches)
     }
@@ -168,7 +196,69 @@ class ResponseSyncTest {
     @Test fun submitThatCannotReachTheServerIsQueued() = runTest {
         val server = FakeTransport { r -> if (r.url.endsWith("/submit")) throw IOException() else FakeTransport.defaultResponse(r) }
         val outcome = sync(server, retry = RetryPolicy(emptyList())).submit(emptyMap(), emptyList())
-        assertEquals("r1", (outcome as SubmitOutcome.Offline).pending.responseId)
+        assertEquals(SubmitOutcome.SavedOffline, outcome)
+        assertEquals("r1", persisted.single().responseId)
+        assertTrue(persisted.single().patches.isEmpty())
+    }
+
+    @Test fun aServerErrorIsTriedOnceMoreAtSubmit() = runTest {
+        var down = true
+        val server = FakeTransport { r -> if (down && r.method == "PATCH") HttpResponse(503, "") else FakeTransport.defaultResponse(r) }
+        val sync = sync(server, retry = RetryPolicy(emptyList()))
+        sync.start()
+        sync.answer("a", QuestAnswer.Text("x"), true)
+        advanceUntilIdle()
+        assertEquals(1, server.patches().size)
+        down = false
+        assertEquals(SubmitOutcome.Sent, sync.submit(mapOf("a" to QuestAnswer.Text("x")), emptyList()))
+        assertEquals(2, server.patches().size)
+        assertTrue(persisted.isEmpty())
+    }
+
+    @Test fun aStalledSubmitIsQueuedAfterTheTimeLimit() = runTest {
+        var sentSubmit = 0
+        val stalled = QuestTransport { r ->
+            if (r.url.endsWith("/submit")) {
+                sentSubmit++
+                delay(10 * 60_000)
+            }
+            FakeTransport.defaultResponse(r)
+        }
+        val sync = sync(stalled)
+        sync.start()
+        sync.answer("a", QuestAnswer.Text("x"), true)
+        advanceUntilIdle()
+        val started = currentTime
+        val outcome = sync.submit(mapOf("a" to QuestAnswer.Text("x")), emptyList())
+        assertEquals(SubmitOutcome.SavedOffline, outcome)
+        assertEquals(ResponseSync.SUBMIT_TIMEOUT_MS, currentTime - started)
+        assertEquals(1, sentSubmit)
+        val p = persisted.single()
+        assertEquals("r1", p.responseId)
+        assertTrue(p.patches.isEmpty())
+        assertEquals("""{"answers":{"a":"x"}}""", p.submitBody)
+        // The cancelled call is gone for good: nothing it does later reaches the queue or the server.
+        advanceUntilIdle()
+        assertEquals(1, sentSubmit)
+        assertFalse(busy.value)
+    }
+
+    @Test fun aQueueThatCantBeWrittenKeepsEverythingForTryAgain() = runTest {
+        canPersist = false
+        val server = FakeTransport(FakeTransport.offline)
+        val sync = sync(server, retry = RetryPolicy(emptyList()))
+        sync.start()
+        sync.answer("a", QuestAnswer.Text("x"), true)
+        advanceUntilIdle()
+        val failed = sync.submit(mapOf("a" to QuestAnswer.Text("x")), emptyList())
+        assertEquals(SubmitOutcome.Failed(QaidQuestsError.Storage("couldn't save the answers to send later")), failed)
+        assertEquals(listOf(Op.OFFLINE_QUEUE), errors.map { it.operation })
+        // Not "sent": Try again saves the very same answers.
+        canPersist = true
+        assertEquals(SubmitOutcome.SavedOffline, sync.submit(mapOf("a" to QuestAnswer.Text("x")), emptyList()))
+        assertEquals(2, persisted.size)
+        assertEquals(listOf(PendingPatch("a", QuestAnswer.Text("x"))), persisted[1].patches)
+        assertEquals(persisted[0].submitBody, persisted[1].submitBody)
     }
 
     @Test fun refusedCreateFailsSubmitAndIsRetriedOnTheNextSubmit() = runTest {
@@ -182,28 +272,29 @@ class ResponseSyncTest {
         sync.answer("a", QuestAnswer.Text("x"), true)
         advanceUntilIdle()
         assertEquals(1, server.count("POST", "/responses"))
-        assertEquals(QuestOperation.CREATE_RESPONSE, errors.single().first)
+        assertEquals(Op.CREATE_RESPONSE, errors.single().operation)
         // A refused create isn't retried on every answer — only at submit, as the web does.
         sync.answer("b", QuestAnswer.Text("y"), true)
         advanceUntilIdle()
         assertEquals(1, server.count("POST", "/responses"))
-        assertEquals(SubmitOutcome.Failed(QaidQuestError.Http(401, "Invalid API key")), sync.submit(emptyMap(), emptyList()))
+        assertEquals(SubmitOutcome.Failed(QaidQuestsError.Rejected(401, "Invalid API key")), sync.submit(emptyMap(), emptyList()))
         assertEquals(2, server.count("POST", "/responses"))
         key = "good"
         assertEquals(SubmitOutcome.Sent, sync.submit(emptyMap(), emptyList()))
         assertEquals(listOf("a=x", "b=y"), values(server))
+        assertEquals(1, server.count("POST", "/submit"))
     }
 
     @Test fun createWithoutAnIdIsRefused() = runTest {
         val server = FakeTransport { r -> if (r.method == "POST") HttpResponse(201, "{}") else FakeTransport.defaultResponse(r) }
         val outcome = sync(server).submit(emptyMap(), emptyList())
-        assertEquals(SubmitOutcome.Failed(QaidQuestError.Decoding("no response id")), outcome)
+        assertEquals(SubmitOutcome.Failed(QaidQuestsError.InvalidResponse("no response id")), outcome)
     }
 
     @Test fun refusedSubmitFails() = runTest {
         val server = FakeTransport { r -> if (r.url.endsWith("/submit")) HttpResponse(410, """{"error":"Quest is archived"}""") else FakeTransport.defaultResponse(r) }
         val outcome = sync(server).submit(emptyMap(), emptyList())
-        assertEquals(SubmitOutcome.Failed(QaidQuestError.Http(410, "Quest is archived")), outcome)
-        assertEquals(QuestOperation.SUBMIT, errors.last().first)
+        assertEquals(SubmitOutcome.Failed(QaidQuestsError.Rejected(410, "Quest is archived")), outcome)
+        assertEquals(Op.SUBMIT, errors.last().operation)
     }
 }

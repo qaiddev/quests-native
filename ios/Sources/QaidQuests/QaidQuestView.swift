@@ -77,6 +77,7 @@ struct QuestRoot: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .background(card(look))
                 .modifier(ForcedScheme(mode: style.mode))
+                .accessibilityIdentifier(QaidQuestTags.card)
                 .onChange(of: controller.titleFocus) { _ in move(.title) }
                 .onChange(of: controller.controlFocus) { _ in move(.control) }
         } else {
@@ -118,6 +119,7 @@ struct QuestRoot: View {
             EndScreen(look: look, title: text.loadErrorTitle, message: detail, icon: nil, focus: $focus) {
                 Button(text.retry) { Task { await controller.retryLoad() } }
                     .buttonStyle(QuestButtonStyle(look: look, primary: true))
+                    .accessibilityIdentifier(QaidQuestTags.retry)
             }
         case .quest:
             if let session = controller.session {
@@ -138,6 +140,7 @@ struct QuestRoot: View {
                               icon: "checkmark", focus: $focus) {
                         if let onClose {
                             Button(text.close, action: onClose).buttonStyle(QuestButtonStyle(look: look, primary: true))
+                                .accessibilityIdentifier(QaidQuestTags.close)
                         }
                     }
                 }
@@ -158,6 +161,7 @@ extension QuestRoot {
                 Spacer()
                 Button(session.retrying ? text.sending : text.tryAgain) { controller.retrySubmit() }
                     .buttonStyle(QuestButtonStyle(look: look, primary: true))
+                    .accessibilityIdentifier(QaidQuestTags.retry)
                     // Not `.disabled`: VoiceOver focus stays on it while sending.
                     .accessibilityAddTraits(session.retrying ? .updatesFrequently : [])
             }
@@ -227,7 +231,7 @@ struct QuestStepScreen: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var text: QaidQuestText { controller.text }
-    private var bottom: Bool { session.quest.progressPosition == .bottom }
+    private var bottom: Bool { session.progressPosition == .bottom }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -278,6 +282,7 @@ struct QuestStepScreen: View {
                             .contentShape(Rectangle())
                     }
                     .accessibilityLabel(text.closeForm)
+                    .accessibilityIdentifier(QaidQuestTags.close)
                 }
             }
             .padding(.bottom, 16)
@@ -314,6 +319,7 @@ struct QuestStepScreen: View {
         .accessibilityElement()
         .accessibilityLabel(text.progressLabel)
         .accessibilityValue(session.progressValueText)
+        .accessibilityIdentifier(QaidQuestTags.progress)
     }
 
     private var footer: some View {
@@ -321,6 +327,7 @@ struct QuestStepScreen: View {
             if session.canGoBack {
                 Button(session.backLabel) { controller.back() }
                     .buttonStyle(QuestButtonStyle(look: look, primary: false))
+                    .accessibilityIdentifier(QaidQuestTags.back)
             }
             if bottom {
                 if session.showsProgress { progressBar.frame(minWidth: 60) } else { Spacer() }
@@ -332,6 +339,7 @@ struct QuestStepScreen: View {
             Button(session.phase == .submitting ? text.sending : session.primaryLabel) { controller.next() }
                 .buttonStyle(QuestButtonStyle(look: look, primary: true))
                 .accessibilityAddTraits(session.phase == .submitting ? .updatesFrequently : [])
+                .accessibilityIdentifier(QaidQuestTags.primary)
         }
     }
 }
@@ -366,6 +374,7 @@ struct QuestStepBody: View {
                     .font(look.font(0.8125))
                     .foregroundColor(look.color(look.palette.error))
                     .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier(QaidQuestTags.error)
             }
         }
         .padding(.vertical, 2)

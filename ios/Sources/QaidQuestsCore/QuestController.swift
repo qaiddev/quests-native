@@ -10,14 +10,20 @@ package struct QuestEnvironment {
     package var transport: QuestTransport
     package var store: OfflineQuestStore?
     package var retry: QuestRetryPolicy
+    /// The save debounce: `config.saveDebounceMs` unless a test sets one.
     package var debounce: TimeInterval
     package var autoAdvanceDelay: TimeInterval
     package var sleep: QuestSleep
+    package var submitTimeout: TimeInterval
+    /// After a response goes into the offline queue: the app flushes it, in case the network is back.
+    package var onSavedOffline: (@MainActor () -> Void)?
 
     package init(config: QaidQuestsConfiguration, device: QuestDeviceInfo, visitorId: String,
                  appMetadata: QuestAppMetadata = QuestAppMetadata(), transport: QuestTransport,
-                 store: OfflineQuestStore?, retry: QuestRetryPolicy = QuestRetryPolicy(), debounce: TimeInterval = 0.5,
-                 autoAdvanceDelay: TimeInterval = 0.18, sleep: @escaping QuestSleep = realSleep) {
+                 store: OfflineQuestStore?, retry: QuestRetryPolicy = QuestRetryPolicy(), debounce: TimeInterval? = nil,
+                 autoAdvanceDelay: TimeInterval = 0.18, sleep: @escaping QuestSleep = realSleep,
+                 submitTimeout: TimeInterval = ResponseSync.defaultSubmitTimeout,
+                 onSavedOffline: (@MainActor () -> Void)? = nil) {
         self.config = config
         self.device = device
         self.visitorId = visitorId
@@ -25,9 +31,11 @@ package struct QuestEnvironment {
         self.transport = transport
         self.store = store
         self.retry = retry
-        self.debounce = debounce
+        self.debounce = debounce ?? TimeInterval(max(config.saveDebounceMs, 0)) / 1000
         self.autoAdvanceDelay = autoAdvanceDelay
         self.sleep = sleep
+        self.submitTimeout = submitTimeout
+        self.onSavedOffline = onSavedOffline
     }
 }
 
@@ -63,7 +71,7 @@ package final class QuestController {
     /// `(text, assertive)`.
     package var onAnnounce: ((String, Bool) -> Void)?
     package var onComplete: (([String: QuestAnswer]) -> Void)?
-    package var onError: ((QaidQuestsErrorReport) -> Void)?
+    package var onError: ((QaidQuestsErrorEvent) -> Void)?
     package var onLog: ((String) -> Void)?
 
     private var sync: ResponseSync?
@@ -106,7 +114,7 @@ package final class QuestController {
         case .failure(let failure):
             let detail = text.loadError(failure)
             screen = .loadFailed(detail)
-            report(QaidQuestsErrorReport(operation: .loadQuest, questId: questId, error: Self.error(for: failure)))
+            report(QaidQuestsErrorEvent(questId: questId, operation: .loadQuest, error: Self.error(for: failure)))
             onAnnounce?("\(text.loadErrorTitle). \(detail)", true)
             onChange?()
         case .success(let quest):
@@ -116,14 +124,19 @@ package final class QuestController {
     }
 
     private func loadTheme() async -> QuestThemeDocument? {
-        guard let themeId = nonBlank(environment.config.themeId) else { return nil }
-        let document = await client.loadTheme(themeId: themeId, apiKey: environment.config.apiKey)
-        if document == nil {
+        let config = environment.config
+        guard let themeId = nonBlank(config.themeId) else { return nil }
+        switch await client.loadTheme(themeId: themeId, version: config.themeVersion, apiKey: config.apiKey) {
+        case .success(let document):
+            if document.ignoresCSS {
+                onLog?("Quest theme \(themeId): custom CSS and \"unstyled\" have no native equivalent and are ignored.")
+            }
+            return document
+        case .failure(let error):
             // As the web embed: the quest still draws, with the default look.
-            report(QaidQuestsErrorReport(operation: .loadTheme, questId: questId,
-                                         error: .invalidResponse("Quest theme \(themeId) couldn't be loaded")))
+            report(QaidQuestsErrorEvent(questId: questId, operation: .loadTheme, error: error))
+            return nil
         }
-        return document
     }
 
     private func begin(_ quest: Questionnaire) {
@@ -136,15 +149,17 @@ package final class QuestController {
             metadata: env.device.metadata(screen: screenName, app: env.appMetadata, extra: extraMetadata)
         )
         let sync = ResponseSync(client: client, questId: quest.id, createBody: body, store: env.store,
-                                debounce: env.debounce, sleep: env.sleep)
+                                debounce: env.debounce, sleep: env.sleep, submitTimeout: env.submitTimeout)
         sync.onError = { [weak self] in self?.report($0) }
+        sync.onSavedOffline = env.onSavedOffline
         sync.onSavingChange = { [weak self] saving in
             self?.saving = saving
             self?.onChange?()
         }
         self.sync = sync
         sync.start()
-        var session = QuestSession(quest: quest, text: text, autoAdvance: env.config.autoAdvance)
+        var session = QuestSession(quest: quest, text: text, autoAdvance: env.config.autoAdvance,
+                                   progressPosition: env.config.progressPosition)
         let effects = session.begin()
         self.session = session
         screen = .quest
@@ -227,7 +242,7 @@ package final class QuestController {
         onChange?()
     }
 
-    private func report(_ report: QaidQuestsErrorReport) {
+    private func report(_ report: QaidQuestsErrorEvent) {
         onLog?("\(report.operation.rawValue) failed: \(report.error)")
         onError?(report)
     }

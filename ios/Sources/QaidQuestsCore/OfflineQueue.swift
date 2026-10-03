@@ -204,7 +204,7 @@ package enum OfflineFlusher {
     /// reported and gone (an answer alone, or the whole response if its create or
     /// submit is refused); unreachable → kept, and the flush stops there.
     package static func flush(store: OfflineQuestStore, transport: QuestTransport, now: Date = Date(),
-                              report: (QaidQuestsErrorReport) -> Void) async -> Outcome {
+                              report: (QaidQuestsErrorEvent) -> Void) async -> Outcome {
         for var entry in store.entries(now: now) {
             // No in-flight retries here: the queue itself is the retry.
             let client = QuestClient(base: entry.base, userAgent: entry.userAgent, transport: transport,
@@ -221,14 +221,14 @@ package enum OfflineFlusher {
                     try? store.update(entry)
                 case .failure(let error):
                     if error.isRetryable { return .stopped }
-                    report(QaidQuestsErrorReport(operation: .createResponse, questId: entry.questId, error: error))
+                    report(QaidQuestsErrorEvent(questId: entry.questId, operation: .createResponse, error: error))
                     store.remove(entry.id)
                     continue
                 }
             }
             while let operation = entry.operations.first {
                 let result: Result<Void, QaidQuestsError>
-                let failed: QaidQuestsErrorReport.Operation
+                let failed: QaidQuestsErrorEvent.Operation
                 var questionId: String?
                 switch operation {
                 case let .patch(id, value):
@@ -241,7 +241,7 @@ package enum OfflineFlusher {
                 }
                 if case .failure(let error) = result {
                     if error.isRetryable { return .stopped }
-                    report(QaidQuestsErrorReport(operation: failed, questId: entry.questId, questionId: questionId,
+                    report(QaidQuestsErrorEvent(questId: entry.questId, operation: failed, questionId: questionId,
                                                  error: error))
                 }
                 entry.operations.removeFirst()

@@ -4,27 +4,31 @@ import XCTest
 @MainActor
 final class ResponseSyncTests: XCTestCase {
     var root: URL!
-    var reports: [QaidQuestsErrorReport] = []
+    var reports: [QaidQuestsErrorEvent] = []
     var savingChanges: [Bool] = []
+    var savedOffline = 0
 
     override func setUp() async throws {
         root = temporaryDirectory()
         reports = []
         savingChanges = []
+        savedOffline = 0
     }
 
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: root)
     }
 
-    private func sync(_ transport: ScriptedTransport, debounce: TimeInterval = 0, store: Bool = true,
-                      delays: [TimeInterval] = []) -> ResponseSync {
+    private func sync(_ transport: QuestTransport, debounce: TimeInterval = 0, store: Bool = true,
+                      delays: [TimeInterval] = [], submitTimeout: TimeInterval = 20) -> ResponseSync {
         let client = QuestClient(base: URL(string: "https://qaid.dev/api/quests")!, userAgent: "UA", transport: transport,
                                  retry: QuestRetryPolicy(delays: delays), sleep: noSleep)
         let sync = ResponseSync(client: client, questId: "quest_1", createBody: ["apiKey": "k", "questId": "quest_1"],
-                                store: store ? OfflineQuestStore(root: root) : nil, debounce: debounce, sleep: realSleep)
+                                store: store ? OfflineQuestStore(root: root) : nil, debounce: debounce, sleep: realSleep,
+                                submitTimeout: submitTimeout)
         sync.onError = { self.reports.append($0) }
         sync.onSavingChange = { self.savingChanges.append($0) }
+        sync.onSavedOffline = { self.savedOffline += 1 }
         return sync
     }
 
@@ -84,7 +88,7 @@ final class ResponseSyncTests: XCTestCase {
         sync.record(questionId: "good", value: .string("y"), debounce: false)
         await sync.waitUntilIdle()
         XCTAssertEqual(transport.patches, ["bad=1", #"good="y""#])
-        XCTAssertEqual(reports, [QaidQuestsErrorReport(operation: .saveAnswer, questId: "quest_1", questionId: "bad",
+        XCTAssertEqual(reports, [QaidQuestsErrorEvent(questId: "quest_1", operation: .saveAnswer, questionId: "bad",
                                                        error: .rejected(status: 400, message: "Invalid value for text question"))])
     }
 
@@ -105,7 +109,7 @@ final class ResponseSyncTests: XCTestCase {
         XCTAssertEqual(transport.requests.count, 4)
     }
 
-    func testOfflineMidFlowRetriesAtSubmitThenQueues() async {
+    func testOfflineMidFlowGoesStraightToTheQueueAtSubmit() async {
         let transport = ScriptedTransport { _ in throw Offline() }
         let sync = sync(transport, delays: [1, 2])
         sync.start()
@@ -118,7 +122,9 @@ final class ResponseSyncTests: XCTestCase {
         XCTAssertEqual(transport.requests.count, 3)
         let outcome = await sync.submit(answers: ["a": .string("x"), "b": .number(2)], clearing: [])
         XCTAssertEqual(outcome, .savedOffline)
-        XCTAssertEqual(transport.requests.count, 6)
+        // The network already failed: no second round of retries before the queue.
+        XCTAssertEqual(transport.requests.count, 3)
+        XCTAssertEqual(savedOffline, 1)
         let queued = OfflineQuestStore(root: root).entries()
         XCTAssertEqual(queued.count, 1)
         XCTAssertEqual(queued[0].start, .pending(createBody: ["apiKey": "k", "questId": "quest_1"]))
@@ -151,7 +157,7 @@ final class ResponseSyncTests: XCTestCase {
         XCTAssertEqual(queued.first?.operations.count, 2)
     }
 
-    func testBackOnlineAtSubmitSendsEverything() async {
+    func testBackOnlineAtSubmitTheQueueSendsEverything() async {
         var online = false
         let transport = ScriptedTransport { request in
             guard online else { throw Offline() }
@@ -162,10 +168,50 @@ final class ResponseSyncTests: XCTestCase {
         sync.record(questionId: "a", value: .string("x"), debounce: false)
         await sync.waitUntilIdle()
         online = true
+        // Queued at once (the app flushes the queue when told), not sent after another wait.
         let outcome = await sync.submit(answers: ["a": .string("x")], clearing: [])
-        XCTAssertEqual(outcome, .sent)
+        XCTAssertEqual(outcome, .savedOffline)
+        XCTAssertEqual(transport.requests.count, 1)
+        XCTAssertEqual(savedOffline, 1)
+        let flushed = await OfflineFlusher.flush(store: OfflineQuestStore(root: root), transport: transport) { _ in }
+        XCTAssertEqual(flushed, .finished)
         XCTAssertEqual(transport.calls.suffix(3), ["POST /api/quests/responses", "PATCH /api/quests/responses/resp_1",
                                                    "POST /api/quests/responses/resp_1/submit"])
+    }
+
+    func testAServerErrorIsTriedOnceMoreAtSubmit() async {
+        var down = true
+        let transport = ScriptedTransport { request in
+            if down && request.method == "PATCH" { return QuestHTTPResponse(status: 503) }
+            return try ScriptedTransport.server()(request)
+        }
+        let sync = sync(transport)
+        sync.start()
+        sync.record(questionId: "a", value: .string("x"), debounce: false)
+        await sync.waitUntilIdle()
+        XCTAssertEqual(transport.patches.count, 1)
+        down = false
+        let outcome = await sync.submit(answers: ["a": .string("x")], clearing: [])
+        XCTAssertEqual(outcome, .sent)
+        XCTAssertEqual(transport.patches.count, 2)
+        XCTAssertEqual(savedOffline, 0)
+    }
+
+    func testAStalledSubmitIsQueuedAfterTheTimeLimit() async {
+        let transport = StallingTransport()
+        let sync = sync(transport, submitTimeout: 0.2)
+        sync.start()
+        sync.record(questionId: "a", value: .string("x"), debounce: false)
+        await sync.waitUntilIdle()
+        let started = Date()
+        let outcome = await sync.submit(answers: ["a": .string("x")], clearing: [])
+        XCTAssertEqual(outcome, .savedOffline)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+        let queued = OfflineQuestStore(root: root).entries()
+        XCTAssertEqual(queued.first?.start, .created(responseId: "resp_1"))
+        XCTAssertEqual(queued.first?.operations, [.submit(answers: ["a": .string("x")])])
+        // The cancelled call stopped where it was: one submit, no retries after the limit.
+        XCTAssertEqual(transport.inner.calls.filter { $0.hasSuffix("/submit") }.count, 1)
     }
 
     func testARefusedCreateIsTriedOnceMoreAtSubmitThenFails() async {
@@ -218,8 +264,26 @@ final class ResponseSyncTests: XCTestCase {
                                 store: OfflineQuestStore(root: root.appendingPathComponent("queue")))
         sync.onError = { self.reports.append($0) }
         sync.start()
+        sync.record(questionId: "a", value: .string("x"), debounce: false)
         let outcome = await sync.submit(answers: [:], clearing: [])
         guard case .failed(.storage) = outcome else { return XCTFail("\(outcome)") }
         XCTAssertEqual(reports.map(\.operation), [.offlineQueue])
+        // Not "sent": once the disk takes it, Try again saves the very same answers.
+        try FileManager.default.removeItem(at: root)
+        let again = await sync.submit(answers: [:], clearing: [])
+        XCTAssertEqual(again, .savedOffline)
+        let queued = OfflineQuestStore(root: root.appendingPathComponent("queue")).entries()
+        XCTAssertEqual(queued.first?.operations, [.patch(questionId: "a", value: .string("x")), .submit(answers: [:])])
+    }
+}
+
+/// Answers everything at once except a submit, which hangs until cancelled.
+final class StallingTransport: QuestTransport, @unchecked Sendable {
+    let inner = ScriptedTransport()
+
+    func send(_ request: QuestHTTPRequest) async throws -> QuestHTTPResponse {
+        let response = try await inner.send(request)
+        if request.url.path.hasSuffix("/submit") { try await Task.sleep(nanoseconds: 60_000_000_000) }
+        return response
     }
 }

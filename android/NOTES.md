@@ -13,16 +13,15 @@ Kover are applied only from `android/build.gradle.kts`.
 
 ## Public API
 
+Names, options, text keys, error cases and operations match the iOS SDK (`QaidQuests`); only
+the type idioms differ (ARGB ints here, CSS colour strings there).
+
 ```kotlin
 // dev.qaid.quests
 object QaidQuests {
     fun configure(context: Context, config: QaidQuestsConfig)
     val isConfigured: Boolean
-    fun setUser(id: String? = null, email: String? = null, name: String? = null)
-    fun clearUser()
-    fun setMetadata(key: String, value: String?)
-    fun clearMetadata()
-    var onError: ((QaidQuestErrorEvent) -> Unit)?
+    var onError: ((QaidQuestsErrorEvent) -> Unit)?
     fun present(
         activity: Activity,
         questId: String,
@@ -31,6 +30,11 @@ object QaidQuests {
         onComplete: ((Map<String, QuestAnswer>) -> Unit)? = null,
         onClose: (() -> Unit)? = null,
     )
+    fun flushOfflineQueue()
+    fun setUser(id: String? = null, email: String? = null, name: String? = null)
+    fun clearUser()
+    fun setMetadata(key: String, value: String?)
+    fun clearMetadata()
 }
 
 // dev.qaid.quests.ui
@@ -54,9 +58,10 @@ class QaidQuestView @JvmOverloads constructor(
     var onClose: (() -> Unit)?
 }
 
+/** Test tags; the same strings as iOS's accessibility identifiers. */
 object QaidQuestTags { CARD, PRIMARY, BACK, CLOSE, ERROR, PROGRESS, TEXT, CURRENCY, RANGE, DATE, RETRY; fun option(value: String): String }
 
-// dev.qaid.quests.core
+// dev.qaid.quests.core — everything else in this package is internal
 object QaidQuestsSdk { const val VERSION = "0.1.0" }
 
 data class QaidQuestsConfig(
@@ -69,44 +74,69 @@ data class QaidQuestsConfig(
     val themeVersion: Int? = null,
     val text: QaidQuestText = QaidQuestText(),
     val autoAdvance: Boolean = false,
-    val progressPosition: ProgressPosition? = null,
+    val progressPosition: QaidQuestProgressPosition? = null,
     val visitorId: String? = null,            // default: the feedback SDK's per-install id
     val saveDebounceMs: Long = 500,
-)
+) { companion object { const val DEFAULT_BASE: String } }
+
+enum class QaidQuestProgressPosition { TOP, BOTTOM }
 
 data class QaidQuestTheme(
     val accent: Int? = null, val error: Int? = null, val focus: Int? = null,   // ARGB
     val fontFamily: String? = null, val fontSize: Float? = null, val cornerRadius: Float? = null,
-    val mode: QaidQuestThemeMode? = null, val preset: String? = null,
-)
-enum class QaidQuestThemeMode { AUTO, LIGHT, DARK }
-enum class ProgressPosition { TOP, BOTTOM }
+    val mode: Mode? = null, val preset: Preset? = null,
+) {
+    enum class Mode { AUTO, LIGHT, DARK }
+    enum class Preset { DEFAULT, MINIMAL, PILL, DENSE }
+}
 
-data class QaidQuestText(/* every visible / spoken string; English defaults are the web embed's */)
+data class QaidQuestText(/* every visible / spoken string, all defaulted */)
+// next, back, submit, thankYouTitle, close,
+// validationRequired, validationMinLength ({count}), validationAmount, validationDate,
+// validationSelectOne, validationSelectMany,
+// loading, loadErrorTitle, loadErrorStatus ({status}), loadErrorEmpty, loadErrorInvalid, loadErrorOffline,
+// retry, submitErrorTitle, submitErrorMessage, tryAgain, sending, saving, savedOffline, notConfigured,
+// unsupportedQuestion, datePlaceholder, clearDate, dateConfirm, dateCancel,
+// required, closeForm, progressLabel, progressValue ({n}, {total}), stepAnnouncement ({n}, {total})
 
 sealed interface QuestAnswer {
     data class Text(val value: String); data class Number(val value: Double)
     data class Choices(val values: List<String>); data object None
 }
 
-sealed class QaidQuestError : Exception {
-    data class Network(val detail: String); data class Http(val status: Int, val error: String)
-    data class Decoding(val detail: String); data class Storage(val detail: String)
-    val isRetryable: Boolean
+sealed class QaidQuestsError : Exception {
+    data class Network(val detail: String); data class Server(val status: Int)
+    data class Rejected(val status: Int, val message: String)
+    data class InvalidResponse(val detail: String); data class Storage(val detail: String)
+    val isRetryable: Boolean   // Network, Server, 408, 429
 }
-enum class QuestOperation { LOAD_DEFINITION, CREATE_RESPONSE, SAVE_ANSWER, SUBMIT, SEND_SAVED }
-data class QaidQuestErrorEvent(val questId: String, val operation: QuestOperation, val error: QaidQuestError)
-```
 
-Everything else in `dev.qaid.quests.core` (session, controller, sync, queue, theme mapping) is
-public so it can be tested on the JVM; it is not a supported API.
+data class QaidQuestsErrorEvent(
+    val questId: String,
+    val operation: Operation,
+    val questionId: String? = null,   // SAVE_ANSWER
+    val error: QaidQuestsError,
+) {
+    enum class Operation { LOAD_QUEST, LOAD_THEME, CREATE_RESPONSE, SAVE_ANSWER, SUBMIT, OFFLINE_QUEUE }
+}
+```
 
 ## Behaviour notes
 
-- Theme `css` and `unstyled` have no native meaning: ignored and logged.
+- Theme `css` and `unstyled` have no native meaning: ignored and logged. A theme that can't be
+  loaded is reported as `LOAD_THEME` and the quest draws with qaid's defaults.
 - Offline: a finished quest that can't reach qaid is saved in `noBackupFilesDir/qaid-quests-queue/`
-  (20 responses, 7 days) and sent on `configure`, on the app's next foreground, and when a network
-  comes up. The thank-you screen says so, and `onComplete` still fires.
-- The inline quest survives a configuration change; the presented sheet (a `ComponentDialog`)
-  closes with its activity.
+  (20 responses, 7 days) and sent at once (in case the network is back), on `configure`, on the
+  app's next foreground, and when a network comes up. The thank-you screen says so, and
+  `onComplete` still fires. If the queue can't be written, the person gets Try again with
+  nothing lost.
+- Submit: once a call has failed on the network, submit goes straight to the offline queue; it
+  never stays on "Sending…" more than 20 s before queueing.
+- Text lengths count UTF-16 units and blanks use JavaScript's whitespace, as the web embed and
+  iOS do. Currency reads the device's decimal separator and `.`; a grouped number ("1,000" in
+  English) is sent as null.
+- Text and currency fields are named through the text field's label slot (not a content
+  description), so TalkBack reads what was typed.
+- Both the inline quest and the presented sheet survive a configuration change: the sheet is
+  shown again over the rebuilt activity with the same step and answers, without `onClose`.
 - Robolectric tests run on SDK 34: Robolectric's SDK 35 runtime needs JDK 21, this build uses 17.

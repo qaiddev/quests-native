@@ -8,8 +8,7 @@ import android.util.Log
 import dev.qaid.quests.core.CustomMetadata
 import dev.qaid.quests.core.PageUrls
 import dev.qaid.quests.core.PendingResponse
-import dev.qaid.quests.core.QaidQuestError
-import dev.qaid.quests.core.QaidQuestErrorEvent
+import dev.qaid.quests.core.QaidQuestsErrorEvent
 import dev.qaid.quests.core.QaidQuestsConfig
 import dev.qaid.quests.core.QaidUser
 import dev.qaid.quests.core.QuestAnswer
@@ -17,7 +16,6 @@ import dev.qaid.quests.core.QuestCallbacks
 import dev.qaid.quests.core.QuestController
 import dev.qaid.quests.core.QuestEnvironment
 import dev.qaid.quests.core.QuestMetadata
-import dev.qaid.quests.core.QuestOperation
 import dev.qaid.quests.core.QuestTransport
 import dev.qaid.quests.internal.Environment
 import dev.qaid.quests.internal.HttpTransport
@@ -56,9 +54,12 @@ object QaidQuests {
     private val customMetadata = CustomMetadata()
     private val main = Handler(Looper.getMainLooper())
 
-    /** Told about every failed call to qaid, on the main thread. Never thrown, never blocks the person. */
+    /**
+     * Every failure talking to qaid (a refused answer, an unreachable submit…), on the main
+     * thread. The person is never blocked by one; this is for the app's own logs.
+     */
     @Volatile
-    var onError: ((QaidQuestErrorEvent) -> Unit)? = null
+    var onError: ((QaidQuestsErrorEvent) -> Unit)? = null
 
     /** The network; tests swap in a scripted one. */
     @Volatile
@@ -99,7 +100,13 @@ object QaidQuests {
     fun clearMetadata() = customMetadata.clear()
 
     /**
-     * Show a quest in a sheet over [activity]. Closing it (Close, back, a tap outside) never
+     * Sends what the offline queue holds now. It also goes by itself on [configure], when the
+     * app comes to the foreground and when a network comes up.
+     */
+    fun flushOfflineQueue() = PendingQueue.flush()
+
+    /**
+     * Show a quest in a sheet over [activity]. It survives a rotation. Closing it (Close, back, a tap outside) never
      * submits, as on the web; what was typed is still saved.
      *
      * @param screen where the person is ("Checkout"): appended to the page URL and stored with
@@ -118,7 +125,7 @@ object QaidQuests {
         checkNotNull(config) { "QaidQuests.configure() must be called before present()" }
         val host = newHost(activity, questId, screen, metadata)
         host.onComplete = { onComplete?.invoke(it) }
-        QuestSheet.show(activity, host.controller, onClose)
+        QuestSheet.present(activity, host.controller, onClose)
     }
 
     /** The host kept under [key], or a new one. */
@@ -147,19 +154,18 @@ object QaidQuests {
         val host = QuestHost()
         host.controller = QuestController(questId, config, environment, transport, scope, object : QuestCallbacks {
             override fun onComplete(answers: Map<String, QuestAnswer>) = host.onComplete(answers)
-            override fun onError(event: QaidQuestErrorEvent) = report(event)
+            override fun onError(event: QaidQuestsErrorEvent) = report(event)
             override fun log(message: String) {
                 Log.i(TAG, message)
             }
-            override fun persist(pending: PendingResponse): Boolean = PendingQueue.save(app, pending)
+            // Sent at once if the network is back already; the queue keeps it otherwise.
+            override fun persist(pending: PendingResponse): Boolean =
+                PendingQueue.save(app, pending).also { saved -> if (saved) PendingQueue.flush() }
         })
         return host
     }
 
-    internal fun report(questId: String, operation: QuestOperation, error: QaidQuestError) =
-        report(QaidQuestErrorEvent(questId, operation, error))
-
-    private fun report(event: QaidQuestErrorEvent) {
+    internal fun report(event: QaidQuestsErrorEvent) {
         Log.w(TAG, "${event.operation} failed for quest ${event.questId}: ${event.error.message}")
         main.post { onError?.invoke(event) }
     }

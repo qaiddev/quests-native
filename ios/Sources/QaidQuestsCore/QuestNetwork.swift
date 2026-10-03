@@ -40,16 +40,24 @@ package struct URLSessionQuestTransport: QuestTransport {
     }
 
     package func send(_ request: QuestHTTPRequest) async throws -> QuestHTTPResponse {
-        var urlRequest = URLRequest(url: request.url, timeoutInterval: timeout)
+        let (data, response) = try await session.data(for: Self.urlRequest(request, timeout: timeout))
+        return QuestHTTPResponse(status: (response as? HTTPURLResponse)?.statusCode ?? 0, body: data)
+    }
+
+    /// Never from the local cache: the definition is served with `max-age=60`, and a quest
+    /// just published (or a theme just changed) must show at once, as Android's does.
+    package static func urlRequest(_ request: QuestHTTPRequest, timeout: TimeInterval) -> URLRequest {
+        var urlRequest = URLRequest(url: request.url, cachePolicy: .reloadIgnoringLocalCacheData,
+                                    timeoutInterval: timeout)
         urlRequest.httpMethod = request.method
         for (name, value) in request.headers { urlRequest.setValue(value, forHTTPHeaderField: name) }
         urlRequest.httpBody = request.body
-        let (data, response) = try await session.data(for: urlRequest)
-        return QuestHTTPResponse(status: (response as? HTTPURLResponse)?.statusCode ?? 0, body: data)
+        return urlRequest
     }
 }
 
-/// What went wrong talking to qaid, for the app's `onError`.
+/// What went wrong talking to qaid, for the app's `onError`. The same cases as Android's
+/// `QaidQuestsError`.
 public enum QaidQuestsError: Error, Equatable, Sendable {
     /// The server was never reached: offline, timed out, DNS.
     case network(String)
@@ -74,21 +82,22 @@ public enum QaidQuestsError: Error, Equatable, Sendable {
     }
 }
 
-/// One failure, with what the SDK was doing when it happened.
-public struct QaidQuestsErrorReport: Equatable, Sendable {
+/// One failure, with what the SDK was doing when it happened. Never thrown, never blocks
+/// the person answering.
+public struct QaidQuestsErrorEvent: Equatable, Sendable {
     public enum Operation: String, Equatable, Sendable {
         case loadQuest, loadTheme, createResponse, saveAnswer, submit, offlineQueue
     }
 
-    public var operation: Operation
     public var questId: String
+    public var operation: Operation
     /// For `saveAnswer`.
     public var questionId: String?
     public var error: QaidQuestsError
 
-    public init(operation: Operation, questId: String, questionId: String? = nil, error: QaidQuestsError) {
-        self.operation = operation
+    public init(questId: String, operation: Operation, questionId: String? = nil, error: QaidQuestsError) {
         self.questId = questId
+        self.operation = operation
         self.questionId = questionId
         self.error = error
     }
@@ -132,14 +141,16 @@ package enum QuestRequests {
                          headers: headers(userAgent: userAgent, json: false))
     }
 
-    /// `/api/quest-themes/<id>/public?key=<apiKey>` on the base's origin. nil for a base
-    /// without a host.
-    package static func theme(base: URL, themeId: String, apiKey: String, userAgent: String) -> QuestHTTPRequest? {
+    /// `/api/quest-themes/<id>/public?key=<apiKey>` on the base's origin, or
+    /// `/api/quest-themes/<id>/v/<version>/public` for one published version. nil for a
+    /// base without a host.
+    package static func theme(base: URL, themeId: String, version: Int? = nil, apiKey: String,
+                              userAgent: String) -> QuestHTTPRequest? {
         var parts = URLComponents()
         parts.scheme = base.scheme
         parts.host = base.host
         parts.port = base.port
-        parts.path = "/api/quest-themes/\(themeId)/public"
+        parts.path = "/api/quest-themes/\(themeId)" + (version.map { "/v/\($0)" } ?? "") + "/public"
         if !apiKey.isEmpty { parts.percentEncodedQuery = "key=\(encodeComponent(apiKey))" }
         guard base.host != nil, let url = parts.url else { return nil }
         return QuestHTTPRequest(method: "GET", url: url, headers: headers(userAgent: userAgent, json: false))
@@ -252,11 +263,24 @@ package struct QuestClient: Sendable {
         return Questionnaire.decode(response.body, fallbackId: questId)
     }
 
-    /// nil on any failure: the quest then draws with the default look, as on the web.
-    package func loadTheme(themeId: String, apiKey: String) async -> QuestThemeDocument? {
-        guard let request = QuestRequests.theme(base: base, themeId: themeId, apiKey: apiKey, userAgent: userAgent),
-              let response = try? await transport.send(request), (200..<300).contains(response.status) else { return nil }
-        return QuestThemeDocument.decode(response.body)
+    /// Once, no retry. On a failure the quest draws with the default look, as on the web.
+    package func loadTheme(themeId: String, version: Int? = nil,
+                           apiKey: String) async -> Result<QuestThemeDocument, QaidQuestsError> {
+        guard let request = QuestRequests.theme(base: base, themeId: themeId, version: version, apiKey: apiKey,
+                                                userAgent: userAgent) else {
+            return .failure(.invalidResponse("No host in \(base.absoluteString)"))
+        }
+        let response: QuestHTTPResponse
+        do {
+            response = try await transport.send(request)
+        } catch {
+            return .failure(.network(error.localizedDescription))
+        }
+        if let error = QuestRequests.check(response) { return .failure(error) }
+        guard let document = QuestThemeDocument.decode(response.body) else {
+            return .failure(.invalidResponse("Invalid theme"))
+        }
+        return .success(document)
     }
 
     package func create(body: QuestJSON) async -> Result<String, QaidQuestsError> {
@@ -289,7 +313,9 @@ package struct QuestClient: Sendable {
             } catch {
                 outcome = .failure(.network(error.localizedDescription))
             }
-            guard case .failure(let error) = outcome, let wait = retry.delay(after: attempt, error: error) else {
+            // A cancelled call (submit's time limit) stops here rather than retrying.
+            guard case .failure(let error) = outcome, !Task.isCancelled,
+                  let wait = retry.delay(after: attempt, error: error) else {
                 return outcome
             }
             attempt += 1

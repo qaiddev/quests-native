@@ -4,7 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** A `visibleIf` value: a string or a number. Anything else never matches an answer. */
-sealed interface RuleValue {
+internal sealed interface RuleValue {
     data class Str(val value: String) : RuleValue
     data class Num(val value: Double) : RuleValue
     data object Other : RuleValue
@@ -22,7 +22,7 @@ sealed interface RuleValue {
  * A `visibleIf` predicate, read the way `quests-embed`'s visibility.ts reads it: `allOf`, then
  * `anyOf`, then `answered`, `equals`, `notEquals`, `in`. A rule with none of those is [Never].
  */
-sealed interface VisibilityRule {
+internal sealed interface VisibilityRule {
     data class AllOf(val rules: List<VisibilityRule>) : VisibilityRule
     data class AnyOf(val rules: List<VisibilityRule>) : VisibilityRule
     data class Answered(val questionId: String?, val answered: Boolean) : VisibilityRule
@@ -64,7 +64,7 @@ sealed interface VisibilityRule {
 /**
  * Which questions are visible: `quests-embed`'s visibility.ts, rule for rule. Pure; never throws.
  */
-object Visibility {
+internal object Visibility {
     /**
      * Walks the questions in order. A rule only sees the answers of questions already
      * resolved visible, so a hidden question reads as unanswered whatever was typed into it,

@@ -65,7 +65,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import dev.qaid.quests.core.ProgressPosition
+import dev.qaid.quests.core.QaidQuestProgressPosition
 import dev.qaid.quests.core.QuestController
 import dev.qaid.quests.core.QuestPhase
 import dev.qaid.quests.core.QuestStep
@@ -166,7 +166,7 @@ private fun ColumnScope.Steps(state: QuestViewState, saving: Boolean, controller
     val step = state.step ?: return
     val ui = LocalQuestUi.current
     val m = ui.metrics
-    val top = state.progressPosition == ProgressPosition.TOP
+    val top = state.progressPosition == QaidQuestProgressPosition.TOP
     val counter = state.showProgress
     val submitting = state.phase == QuestPhase.SUBMITTING
     if (state.title != null || (top && (counter || saving)) || onClose != null) {
@@ -250,7 +250,7 @@ private fun StepBody(state: QuestViewState, step: QuestStep, controller: QuestCo
                 .focusable()
                 .semantics(mergeDescendants = true) {
                     heading()
-                    contentDescription = if (question.required) "${question.label}, ${state.text.requiredLabel}" else question.label
+                    contentDescription = if (question.required) "${question.label}, ${state.text.required}" else question.label
                 },
         ) {
             Text(question.label, fontSize = ui.em(1.125f), fontWeight = FontWeight.SemiBold)
@@ -340,7 +340,7 @@ private fun CloseButton(state: QuestViewState, onClose: () -> Unit) {
     val ui = LocalQuestUi.current
     IconButton(
         onClick = onClose,
-        modifier = Modifier.testTag(QaidQuestTags.CLOSE).semantics { contentDescription = state.text.closeLabel },
+        modifier = Modifier.testTag(QaidQuestTags.CLOSE).semantics { contentDescription = state.text.closeForm },
     ) {
         val color = ui.colors.mutedFg.color()
         Canvas(Modifier.size(12.dp)) {

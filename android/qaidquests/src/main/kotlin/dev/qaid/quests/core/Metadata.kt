@@ -6,7 +6,7 @@ import org.json.JSONObject
  * The app and device a response came from: sent as the response's `metadata` and folded into
  * its user agent, the same shape the feedback SDK sends.
  */
-data class DeviceInfo(
+internal data class DeviceInfo(
     val osVersion: String,
     val model: String,
     val appName: String,
@@ -27,7 +27,7 @@ data class DeviceInfo(
 }
 
 /** Who is signed in, as the app chooses to say. Sent as `metadata.user`. */
-data class QaidUser(val id: String? = null, val email: String? = null, val name: String? = null) {
+internal data class QaidUser(val id: String? = null, val email: String? = null, val name: String? = null) {
     /** Blank fields dropped, each cut to the metadata value limit; null when nothing is left. */
     fun cleaned(): QaidUser? {
         fun clean(value: String?) = value.orEmpty().trim().take(CustomMetadata.MAX_VALUE_LENGTH).ifEmpty { null }
@@ -47,7 +47,7 @@ data class QaidUser(val id: String? = null, val email: String? = null, val name:
  * [MAX_KEYS] keys (new ones past that are ignored), keys cut to [MAX_KEY_LENGTH], values to
  * [MAX_VALUE_LENGTH]. Safe from any thread.
  */
-class CustomMetadata {
+internal class CustomMetadata {
     private val values = LinkedHashMap<String, String>()
 
     /** Sets [key], or removes it when [value] is null. */
@@ -76,7 +76,7 @@ class CustomMetadata {
     }
 }
 
-object QuestMetadata {
+internal object QuestMetadata {
     const val SOURCE = "native-quest"
 
     /**
@@ -107,7 +107,7 @@ object QuestMetadata {
     }
 }
 
-object PageUrls {
+internal object PageUrls {
     /** The configured page URL, plus the screen as one more path segment. */
     fun pageUrl(base: String, screen: String?): String {
         val segment = screen?.let(::slug).orEmpty()
