@@ -1,0 +1,8 @@
+.build/
+.swiftpm/
+build/
+.gradle/
+.kotlin/
+local.properties
+# Coverage output (scripts/coverage*.sh). coverage-badge.json at the root is committed.
+/coverage/
