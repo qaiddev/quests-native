@@ -10,7 +10,14 @@ screen or as a sheet, with native text fields, sliders, date pickers and option 
 | Platform | Install | Needs |
 | --- | --- | --- |
 | iOS | Swift Package Manager: `https://github.com/qaiddev/quests-native`, product `QaidQuests` | iOS 15+ |
-| Android | `implementation("dev.qaid:quests:0.1.0")` from Maven Central | minSdk 26, compileSdk 35+, Compose compiler plugin |
+| Android | The `android/qaidquests` module from this repo (`dev.qaid:quests:0.1.0` is not on Maven Central yet) | minSdk 26, compileSdk 35+, Compose compiler plugin |
+
+<p>
+  <img alt="A quest step in light mode: How often do you brew at home?, with A few times a week picked" src="https://raw.githubusercontent.com/qaiddev/quests-native/prod/docs/screenshots/choice-light.png" width="320">
+  <img alt="The next step in dark mode with the pill preset and an amber accent: a 1 to 10 slider set to 6" src="https://raw.githubusercontent.com/qaiddev/quests-native/prod/docs/screenshots/range-dark.png" width="320">
+</p>
+
+A quest inline, in light mode, and the next step with `theme` set to dark, the pill preset and an amber accent. Drawn on Android.
 
 You need your project's **embed key** (**Settings** → **API Keys**) and a quest that has been saved as a
 version. Integration guide: https://qaid.dev/guides/quests-native. Exact API: [`ios/NOTES.md`](ios/NOTES.md),
@@ -72,6 +79,13 @@ Release: bump `QaidQuestsSDK.version`, `QaidQuestsSdk.VERSION` and the coordinat
 `android/build.gradle.kts`; tag `x.y.z` (the tag is the Swift release); then from `android/` run
 `./gradlew --no-daemon :qaidquests:publishAndReleaseToMavenCentral` with `mavenCentralUsername`,
 `mavenCentralPassword` and `signingInMemoryKey` in `~/.gradle/gradle.properties`.
+
+Screenshots: the README's pictures are drawn by Robolectric, no device needed. From `android/`:
+
+```sh
+QAID_SCREENSHOT_DIR=../docs/screenshots \
+  ./gradlew --no-daemon :qaidquests:testDebugUnitTest --tests '*ReadmeScreenshots*'
+```
 
 ## Coverage
 
