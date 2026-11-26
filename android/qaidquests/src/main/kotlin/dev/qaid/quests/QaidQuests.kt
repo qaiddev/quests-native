@@ -17,6 +17,8 @@ import dev.qaid.quests.core.QuestController
 import dev.qaid.quests.core.QuestEnvironment
 import dev.qaid.quests.core.QuestMetadata
 import dev.qaid.quests.core.QuestTransport
+import dev.qaid.quests.core.SecretKeyGuard
+import dev.qaid.quests.core.SecretKeyReports
 import dev.qaid.quests.internal.Environment
 import dev.qaid.quests.internal.HttpTransport
 import dev.qaid.quests.internal.PendingQueue
@@ -75,9 +77,17 @@ object QaidQuests {
 
     internal val currentConfig: QaidQuestsConfig? get() = config
 
-    /** Configure, and send any responses saved while the app was offline. */
+    /**
+     * Configure, and send any responses saved while the app was offline.
+     *
+     * A platform API secret (`QAID_SECRET_…`) anywhere in [config] is dropped, logged as an
+     * error and reported to qaid (its hash only), which revokes it.
+     */
     fun configure(context: Context, config: QaidQuestsConfig) {
-        this.config = config
+        val found = mutableListOf<String>()
+        val clean = SecretKeyGuard.scrub(config, found)
+        this.config = clean
+        reportSecrets(found, clean, clean.pageUrlBase(context.packageName))
         PendingQueue.attach(context)
         PendingQueue.flush()
     }
@@ -145,11 +155,18 @@ object QaidQuests {
         val app = context.applicationContext ?: context
         PendingQueue.attach(app)
         val device = Environment.deviceInfo(app, config.appName)
+        val pageUrl = PageUrls.pageUrl(config.pageUrlBase(app.packageName), screen)
+        // The config was cleaned by configure(); the app's metadata is cleaned here, before it is sent.
+        val found = mutableListOf<String>()
+        val appUser = SecretKeyGuard.scrub(user, found)?.cleaned()
+        val custom = SecretKeyGuard.scrub(customMetadata.snapshot(), found)
+        val extra = SecretKeyGuard.scrub(metadata.orEmpty(), found)
+        reportSecrets(found, config, pageUrl)
         val environment = QuestEnvironment(
-            pageUrl = PageUrls.pageUrl(config.pageUrlBase(app.packageName), screen),
+            pageUrl = pageUrl,
             visitorId = config.visitorId?.takeIf { it.isNotBlank() } ?: VisitorId.get(app),
             userAgent = device.userAgent,
-            metadata = QuestMetadata.build(device, screen, user, customMetadata.snapshot(), metadata.orEmpty()),
+            metadata = QuestMetadata.build(device, screen, appUser, custom, extra),
         )
         val host = QuestHost()
         host.controller = QuestController(questId, config, environment, transport, scope, object : QuestCallbacks {
@@ -163,6 +180,11 @@ object QaidQuests {
                 PendingQueue.save(app, pending).also { saved -> if (saved) PendingQueue.flush() }
         })
         return host
+    }
+
+    /** Logs a found secret and posts its hash to qaid, once per secret per process. */
+    private fun reportSecrets(found: List<String>, config: QaidQuestsConfig, pageUrl: String) {
+        SecretKeyReports.report(found, config.base, pageUrl, transport, scope) { Log.e(TAG, it) }
     }
 
     internal fun report(event: QaidQuestsErrorEvent) {

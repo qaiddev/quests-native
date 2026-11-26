@@ -31,9 +31,11 @@ import dev.qaid.quests.core.QaidQuestsErrorEvent
 import dev.qaid.quests.core.QaidQuestTheme
 import dev.qaid.quests.core.QaidQuestsConfig
 import dev.qaid.quests.core.QuestAnswer
+import dev.qaid.quests.core.SecretKeyReports
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -77,6 +79,32 @@ class QaidQuestUiTest {
     }
 
     private fun next() = compose.onNodeWithTag(QaidQuestTags.PRIMARY).performClick().also { compose.waitForIdle() }
+
+    @Test fun aSecretKeyIsNeverSentAndIsReportedOnce() {
+        val secret = "QAID_SECRET_abcdefghijklmnopqrstuvwxyz0123456789ABCD"
+        SecretKeyReports.reset()
+        try {
+            QaidQuests.configure(compose.activity, QaidQuestsConfig(apiKey = secret, appName = "App"))
+            QaidQuests.setMetadata("token", "t $secret")
+            assertEquals("", QaidQuests.currentConfig!!.apiKey)
+            show()
+            idleMain()
+            val create = JSONObject(server.requests.first { it.method == "POST" && it.url.endsWith("/responses") }.body!!)
+            assertFalse(create.has("apiKey")) // an empty key is left out
+            assertEquals("t", create.getJSONObject("metadata").getJSONObject("custom").getString("token"))
+            server.requests.forEach {
+                assertFalse(it.url.contains(secret))
+                assertFalse(it.body.orEmpty().contains(secret))
+            }
+            val reports = server.requests.filter { it.url == "https://qaid.dev/api/leaked-key" }
+            assertEquals(1, reports.size)
+            assertEquals(mapOf("Content-Type" to "text/plain"), reports[0].headers)
+            assertEquals("quests-android", JSONObject(reports[0].body!!).getString("source"))
+        } finally {
+            QaidQuests.clearMetadata()
+            SecretKeyReports.reset()
+        }
+    }
 
     @Test fun choiceStepValidatesThenMovesForwardAndBack() {
         show()

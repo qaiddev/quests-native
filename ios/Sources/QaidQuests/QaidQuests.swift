@@ -27,8 +27,17 @@ public enum QaidQuests {
     public static var onError: ((QaidQuestsErrorEvent) -> Void)?
 
     /// Also sends any responses saved while offline, and keeps watching for the network.
+    ///
+    /// A platform API secret (`QAID_SECRET_…`) anywhere in the configuration is dropped,
+    /// logged as an error and reported to qaid (its hash only), which revokes it.
     public static func configure(_ configuration: QaidQuestsConfiguration) {
+        let (configuration, secrets) = SecretKeyGuard.scrub(configuration)
         self.configuration = configuration
+        SecretKeyReporter.shared.report(
+            secrets, base: configuration.base,
+            pageUrl: QuestPageUrl.make(config: configuration, bundleIdentifier: Bundle.main.bundleIdentifier ?? "",
+                                       screen: nil),
+            transport: URLSessionQuestTransport())
         QuestQueueRuntime.shared.start()
     }
 

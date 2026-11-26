@@ -17,7 +17,7 @@ object QaidQuestsSdk {
  * path segment, as the feedback SDK does.
  */
 data class QaidQuestsConfig(
-    /** The project's embed API key — the same one the web embed uses (not a `qd_live_` key). */
+    /** The project's embed API key — the same one the web embed uses (it starts `QAID_PUB_`; never a `QAID_SECRET_` platform key). */
     val apiKey: String,
     /** Sent with each response's metadata and user agent. */
     val appName: String,

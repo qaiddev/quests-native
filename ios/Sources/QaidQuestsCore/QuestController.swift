@@ -77,10 +77,24 @@ package final class QuestController {
     private var sync: ResponseSync?
     private var tasks: [Task<Void, Never>] = []
 
+    /// A platform API secret (`QAID_SECRET_…`) in the configuration, the app's metadata or
+    /// `metadata` is taken out here, before any request is built, and reported once.
     package init(questId: String, screen: String?, metadata: [String: String], environment: QuestEnvironment) {
+        var environment = environment
+        let config = SecretKeyGuard.scrub(environment.config)
+        let app = SecretKeyGuard.scrub(environment.appMetadata)
+        let extra = SecretKeyGuard.scrub(metadata)
+        environment.config = config.value
+        environment.appMetadata = app.value
+        SecretKeyReporter.shared.report(
+            config.found + app.found + extra.found, base: config.value.base,
+            pageUrl: QuestPageUrl.make(config: config.value, bundleIdentifier: environment.device.bundleIdentifier,
+                                       screen: screen),
+            transport: environment.transport)
+
         self.questId = questId
         self.screenName = screen
-        self.extraMetadata = metadata
+        self.extraMetadata = extra.value
         self.environment = environment
         client = QuestClient(base: environment.config.base, userAgent: environment.device.userAgent,
                              transport: environment.transport, retry: environment.retry, sleep: environment.sleep)
