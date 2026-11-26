@@ -307,7 +307,7 @@ final class ConfigurationTests: XCTestCase {
         XCTAssertFalse(config.autoAdvance)
         XCTAssertNil(config.visitorId)
         XCTAssertEqual(config.text, QaidQuestText())
-        XCTAssertEqual(QaidQuestsSDK.version, "0.1.0")
+        XCTAssertEqual(QaidQuestsSDK.version, "0.2.0")
         let theme = QaidQuestTheme()
         XCTAssertNil(theme.accent ?? theme.error ?? theme.focus ?? theme.fontFamily)
         XCTAssertNil(theme.cornerRadius)
@@ -330,12 +330,12 @@ final class ConfigurationTests: XCTestCase {
 
     func testDeviceUserAgentAndMetadata() {
         let device = Fixtures.device
-        XCTAssertEqual(device.userAgent, "Crew/1.4 (812; iOS 18.1; iPhone15,2) QaidQuests/0.1.0")
+        XCTAssertEqual(device.userAgent, "Crew/1.4 (812; iOS 18.1; iPhone15,2) QaidQuests/0.2.0")
         var app = QuestAppMetadata(user: QuestUser(id: "u1", email: "", name: "Ann"))
         app.set("plan", "pro")
         let metadata = device.metadata(screen: "Home", app: app, extra: ["feedbackId": "fb_1", "source": "override"])
         XCTAssertEqual(metadata["platform"], "ios")
-        XCTAssertEqual(metadata["sdk"], "qaid-quests-ios/0.1.0")
+        XCTAssertEqual(metadata["sdk"], "qaid-quests-ios/0.2.0")
         XCTAssertEqual(metadata["screen"], "Home")
         XCTAssertEqual(metadata["user"], ["id": "u1", "name": "Ann"])
         XCTAssertEqual(metadata["custom"], ["plan": "pro"])

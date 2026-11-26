@@ -4,7 +4,7 @@ import java.net.URI
 import java.net.URLEncoder
 
 object QaidQuestsSdk {
-    const val VERSION = "0.1.0"
+    const val VERSION = "0.2.0"
 }
 
 /**

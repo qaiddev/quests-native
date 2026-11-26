@@ -10,7 +10,7 @@ screen or as a sheet, with native text fields, sliders, date pickers and option 
 | Platform | Install | Needs |
 | --- | --- | --- |
 | iOS | Swift Package Manager: `https://github.com/qaiddev/quests-native`, product `QaidQuests` | iOS 15+ |
-| Android | The `android/qaidquests` module from this repo (`dev.qaid:quests:0.1.0` is not on Maven Central yet) | minSdk 26, compileSdk 35+, Compose compiler plugin |
+| Android | The `android/qaidquests` module from this repo (`dev.qaid:quests:0.2.0` is not on Maven Central yet) | minSdk 26, compileSdk 35+, Compose compiler plugin |
 
 <p>
   <img alt="A quest step in light mode: How often do you brew at home?, with A few times a week picked" src="https://raw.githubusercontent.com/qaiddev/quests-native/prod/docs/screenshots/choice-light.png" width="320">

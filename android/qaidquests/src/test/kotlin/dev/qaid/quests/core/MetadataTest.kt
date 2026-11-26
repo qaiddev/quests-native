@@ -17,7 +17,7 @@ class MetadataTest {
             setOf("platform", "osVersion", "device", "app", "appVersion", "build", "locale", "sdk", "source", "screen", "feedbackId"),
             meta.keys().asSequence().toSet(),
         )
-        assertEquals("qaid-quests-android/0.1.0", meta.getString("sdk"))
+        assertEquals("qaid-quests-android/0.2.0", meta.getString("sdk"))
         assertEquals("override", meta.getString("source"))
         assertEquals("fb1", meta.getString("feedbackId"))
         assertEquals("native-quest", QuestMetadata.build(device, null).getString("source"))
@@ -61,8 +61,8 @@ class MetadataTest {
     }
 
     @Test fun deviceAndUserAgent() {
-        assertEquals("CinemaCrew/1.4 (812; Android 15; Google Pixel 8) QaidQuests/0.1.0", device.userAgent)
-        assertEquals("ios/1 (2; ios 18; x) QaidQuests/0.1.0", DeviceInfo("18", "x", "ios", "1", "2", "en", platform = "ios").userAgent)
+        assertEquals("CinemaCrew/1.4 (812; Android 15; Google Pixel 8) QaidQuests/0.2.0", device.userAgent)
+        assertEquals("ios/1 (2; ios 18; x) QaidQuests/0.2.0", DeviceInfo("18", "x", "ios", "1", "2", "en", platform = "ios").userAgent)
         assertEquals("Google Pixel 8", DeviceInfo.model("Google", "Pixel 8"))
         assertEquals("OnePlus 9", DeviceInfo.model("OnePlus", "OnePlus 9"))
     }

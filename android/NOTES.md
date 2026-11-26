@@ -1,6 +1,6 @@
 # qaid quests for Android — notes
 
-Artifact `dev.qaid:quests:0.1.0` (not on Maven Central yet), namespace `dev.qaid.quests`, minSdk 26, AAR `minCompileSdk` 35.
+Artifact `dev.qaid:quests:0.2.0` (not on Maven Central yet), namespace `dev.qaid.quests`, minSdk 26, AAR `minCompileSdk` 35.
 Compose BOM 2026.04.01 (Compose 1.11, Material 3 1.4), core-ktx 1.16.0, activity-ktx 1.10.1, coroutines 1.11.0.
 
 ## Including by source
@@ -62,7 +62,7 @@ class QaidQuestView @JvmOverloads constructor(
 object QaidQuestTags { CARD, PRIMARY, BACK, CLOSE, ERROR, PROGRESS, TEXT, CURRENCY, RANGE, DATE, RETRY; fun option(value: String): String }
 
 // dev.qaid.quests.core — everything else in this package is internal
-object QaidQuestsSdk { const val VERSION = "0.1.0" }
+object QaidQuestsSdk { const val VERSION = "0.2.0" }
 
 data class QaidQuestsConfig(
     val apiKey: String,

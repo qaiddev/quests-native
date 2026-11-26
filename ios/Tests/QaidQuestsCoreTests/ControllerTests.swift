@@ -102,7 +102,7 @@ final class ControllerTests: XCTestCase {
         XCTAssertEqual(createBody["questId"], "quest_1")
         XCTAssertEqual(createBody["pageUrl"], "app://com.example.crew/settings")
         XCTAssertEqual(createBody["visitorId"], "visitor_1")
-        XCTAssertEqual(createBody["userAgent"], "Crew/1.4 (812; iOS 18.1; iPhone15,2) QaidQuests/0.1.0")
+        XCTAssertEqual(createBody["userAgent"], "Crew/1.4 (812; iOS 18.1; iPhone15,2) QaidQuests/0.2.0")
         XCTAssertEqual(createBody["metadata"]?["feedbackId"], "fb_9")
         XCTAssertEqual(createBody["metadata"]?["screen"], "Settings")
         XCTAssertEqual(createBody["metadata"]?["user"], ["id": "u1"])

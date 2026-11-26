@@ -40,7 +40,7 @@ project(":qaidquests") {
                     variant = "release",
                 ),
             )
-            coordinates("dev.qaid", "quests", "0.1.0")
+            coordinates("dev.qaid", "quests", "0.2.0")
             publishToMavenCentral()
             if (hasSigningKey) signAllPublications()
             pom {

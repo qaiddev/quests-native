@@ -1,4 +1,4 @@
-# QaidQuests (iOS) 0.1.0 — public API
+# QaidQuests (iOS) 0.2.0 — public API
 
 SwiftPM product `QaidQuests` (iOS 15+). `import QaidQuests` re-exports the public types of
 `QaidQuestsCore`. Names, options, text keys, error cases and operations match the Android SDK
@@ -94,7 +94,7 @@ public struct QaidQuestText: Equatable, Sendable   // every drawn string; member
 // unsupportedQuestion, datePlaceholder, clearDate, dateConfirm, dateCancel (Android's dialog only),
 // required, closeForm, progressLabel, progressValue ({n}, {total}), stepAnnouncement ({n}, {total})
 
-public enum QaidQuestsSDK { public static let version: String }   // "0.1.0"
+public enum QaidQuestsSDK { public static let version: String }   // "0.2.0"
 ```
 
 ## Answers and errors
